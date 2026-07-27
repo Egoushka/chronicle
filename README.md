@@ -43,23 +43,63 @@ Full reasoning, benchmarks and citations: [`docs/RESEARCH.md`](docs/RESEARCH.md)
 
 ## It is not a Telegram tool
 
-Telegram is the richest source, not the only one. Every adapter turns some
-existing homelab Postgres into the same `Event` shape; everything downstream
-is source-agnostic.
+Telegram is the richest channel, not the only one. **18 adapters**, five
+storage shapes, one `Event` shape downstream.
 
-| adapter | holds | status |
+| tier | sources | why |
 |---|---|---|
-| `telegram` | 681k messages | implemented |
-| `wakapi` | what you actually coded, by the minute | implemented |
-| `dawarich` | where you actually were (PostGIS stays/trips) | implemented |
-| `immich`, `paperless`, `firefly`, `karakeep`, `miniflux` | photos, docs, money, bookmarks, reading | interface ready |
+| **1 · core** | `telegram` `wakapi` `dawarich` `calendar` | the archive is worth having with only these |
+| **2 · behaviour** | `firefly` `lastfm` `forgejo` `jira` | what you *did*, as opposed to what you *said* |
+| **3 · artifact** | `immich` `paperless` `gmail` `notion` `karakeep` `github` `linkedin` `slack` | things you made, saved, or were sent |
+| **4 · ambient** | `miniflux` `owntracks` | weak signal; on last, off first if precision drops |
 
-This matters most for the questions worth asking. *"What was happening in the months
-before things went wrong?"* — Telegram tells you what you **said**. Location, coding
-activity and spending tell you what you **did**, and you don't curate those.
+Storage shapes, because the homelab is not uniform and assuming it was is how
+the first version broke: **PostgreSQL** (telegram, immich, paperless,
+miniflux, forgejo, dawarich) · **MariaDB** (firefly) · **SQLite** (wakapi,
+karakeep) · **flat JSONL files** (owntracks) · **HTTP/MCP** (gmail, calendar,
+notion, slack, jira, linkedin, lastfm, github).
 
-Every adapter must be independently droppable. If one rots, Chronicle loses a
-source and keeps working.
+### The policy layer is the point
+
+"Use all possible channels" has a failure mode that looks exactly like the one
+Chronicle was built to fix. Indexing 681k sub-20-char messages was the wrong
+**unit**. Turning on twenty sources without a policy is the wrong **source
+mix** — miniflux alone can contribute 100k article rows you never opened,
+immich has 400 near-identical burst frames per moment, and the archive becomes
+millions of events that are ~90% chaff. Precision collapses the same way.
+
+So every source declares a **density**, and density decides how hard the
+adapter aggregates *before* anything reaches the episode layer:
+
+- `NARRATIVE` — deliberate human text. Segmented into episodes.
+- `DISCRETE` — one row really is one thing that happened. Passed through.
+- `TELEMETRY` — meaningful only in aggregate. **The adapter rolls it up**:
+  wakapi heartbeats → coding sessions, dawarich points → stays, lastfm
+  scrobbles → listening sessions, immich photos → photo sessions.
+- `AMBIENT` — stored, but kept off the default retrieval surface.
+
+`chronicle/sources.py` also lists the ~40 homelab stacks that are explicitly
+**not** sources, so the boundary is documented rather than rediscovered. All
+57 stacks is not the goal; monitoring, qdrant and vaultwarden describe the
+machine, not the life.
+
+`make test` enforces this: every adapter must have a policy, densities must
+match, and `dawarich`/`owntracks` are flagged as mutually exclusive (same GPS
+signal — enabling both double-counts every trip and the duplicate reads as
+corroboration).
+
+### Why more channels actually helps
+
+*"What was happening in the months before things went wrong?"* Telegram
+tells you what you **said**. Location tells you whether you stopped leaving
+the house, wakapi whether you stopped coding, firefly whether spending
+changed, lastfm what you played at 3am, immich whether you stopped taking
+photos. **The behavioural signals are more honest than the conversational
+ones, because you don't curate them.**
+
+And cross-source corroboration turns a guess into evidence: a trip mentioned
+in Telegram, confirmed by dawarich coordinates, photographed in immich, and
+paid for in firefly is a fact you can trust.
 
 ## Relationship to Hindsight
 
@@ -117,7 +157,7 @@ that bites hardest at the ~1%-cardinality date ranges you query most.
 
 ```bash
 git clone <this repo> chronicle && cd chronicle
-make test                     # 31 unit tests, no DB or models needed
+make test                     # 45 unit tests, no DB or models needed
 cp .env.example .env          # fill in, then `make encrypt STACK=chronicle` in homelab
 make smoke                    # migrations + every SQL function, throwaway DB
 ```
@@ -140,10 +180,17 @@ repo, then `docker compose up -d`.
 
 Working: segmentation, gap fitting, cross-script entity resolution, intent
 routing, RRF fusion, bi-temporal facts with deterministic conflict resolution,
-the full schema, three adapters, MCP tool surface.
+the full schema, the source-policy layer, 18 adapters across 5 storage shapes,
+MCP tool surface.
+
+The SQL-backed adapters (telegram, wakapi, dawarich, immich, paperless,
+firefly, karakeep, miniflux, forgejo) carry real queries against real schemas
+but have only been run against fixtures — verify each one against your data
+before trusting its output. The API adapters take an injected `fetch_page`
+callable and need wiring to the corresponding MCP tool.
 
 Stubbed: `api.py`, `worker.py`, `embed.py` — the FastAPI handlers and the batch
 enrichment loop. The hard parts are done; these are wiring.
 
-Tested: 31 unit tests, plus migrations and every SQL function exercised
+Tested: 45 unit tests, plus migrations and every SQL function exercised
 against real PostgreSQL 16 + pgvector 0.8.0 in CI.

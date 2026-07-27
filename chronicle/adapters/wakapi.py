@@ -17,7 +17,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Iterator
 
-from .base import Adapter, SourceEvent, register
+from .base import Density, SourceEvent, SqlAdapter, coerce_ts, register
 
 log = logging.getLogger(__name__)
 
@@ -28,12 +28,17 @@ HEARTBEAT_GAP = timedelta(minutes=15)
 
 
 @register
-class WakapiAdapter(Adapter):
+class WakapiAdapter(SqlAdapter):
     source = "wakapi"
-    conversational = False
+    # Wakapi in this homelab is SQLite on a volume, not Postgres. Named
+    # server-side cursors do not exist there, and a buffered read of the
+    # heartbeat table would pull the whole thing into the worker's 8 GB.
+    dialect = "sqlite"
+    density = Density.TELEMETRY
+    itersize = 20_000
 
-    def __init__(self, conn_factory, user: str):
-        self._conn_factory = conn_factory
+    def __init__(self, dsn: str, user: str):
+        super().__init__(dsn)
         self.user = user
 
     def fetch(self, since: datetime | None = None,
@@ -47,10 +52,7 @@ class WakapiAdapter(Adapter):
             ORDER BY time
         """
         params = {"user": self.user, "since": since, "until": until}
-        with self._conn_factory() as conn, conn.cursor(name="wakapi_stream") as cur:
-            cur.itersize = 10_000
-            cur.execute(sql, params)
-            yield from self._rollup(cur)
+        yield from self._rollup(self._stream(sql, params))
 
     def _rollup(self, rows) -> Iterator[SourceEvent]:
         """Collapse dense heartbeats into coding-session durations."""
@@ -77,11 +79,15 @@ class WakapiAdapter(Adapter):
                     "files_touched": len(files),
                     "minutes": minutes,
                     "ended_at": last.isoformat(),
-                    "thread_key": f"wakapi:{cur_project}",
                 },
+                thread_key=f"wakapi:{cur_project}",
             )
 
-        for ts, project, language, entity, _branch in rows:
+        for raw_ts, project, language, entity, _branch in rows:
+            # SQLite hands back TEXT here, Postgres hands back datetime.
+            ts = coerce_ts(raw_ts)
+            if ts is None:
+                continue
             new_block = (
                 cur_project is not None
                 and (project != cur_project or ts - last > HEARTBEAT_GAP)

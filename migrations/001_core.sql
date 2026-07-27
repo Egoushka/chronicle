@@ -26,14 +26,29 @@ ALTER TEXT SEARCH CONFIGURATION ru_unaccent
 --  LAYER 0 — immutable event spine
 -- ---------------------------------------------------------------------------
 
+-- 18 channels are implemented. `density` is the load-bearing column: it
+-- decides how hard a source is aggregated BEFORE anything reaches the episode
+-- layer. Turning on every source without it reproduces the original mistake
+-- (indexing 681k sub-20-char messages) one level up, as the wrong source mix.
 CREATE TABLE source (
-    source        TEXT PRIMARY KEY,          -- telegram | wakapi | dawarich | ...
-    conversational BOOLEAN NOT NULL DEFAULT FALSE,
+    source        TEXT PRIMARY KEY,
+    density       TEXT NOT NULL DEFAULT 'discrete'
+                  CHECK (density IN ('narrative','discrete','telemetry','ambient')),
+    tier          SMALLINT NOT NULL DEFAULT 3,   -- 1 core .. 4 ambient
+    -- Only NARRATIVE sources get time-gap segmentation. Telemetry arrives
+    -- pre-aggregated from its adapter; gap-fitting it yields nonsense
+    -- (measured: wakapi p90 = 2 days, which clamps to the 6h ceiling).
+    conversational BOOLEAN GENERATED ALWAYS AS (density = 'narrative') STORED,
     enabled       BOOLEAN NOT NULL DEFAULT TRUE,
-    last_ingested_at TIMESTAMPTZ,            -- resume point after an OOM kill
+    hindsight_bank TEXT,                         -- where promoted facts route
+    last_ingested_at TIMESTAMPTZ,                -- resume point after an OOM kill
     last_error    TEXT,
     added_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- AMBIENT sources are stored but kept off the default retrieval surface.
+CREATE INDEX source_retrievable_idx ON source (source)
+    WHERE enabled AND density <> 'ambient';
 
 CREATE TABLE person (
     person_id     BIGSERIAL PRIMARY KEY,

@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 from typing import Iterator
 
-from .base import Adapter, SourceEvent, register
+from .base import Density, SourceEvent, SqlAdapter, register
 
 log = logging.getLogger(__name__)
 
@@ -24,12 +24,13 @@ BATCH = 5_000
 
 
 @register
-class TelegramAdapter(Adapter):
+class TelegramAdapter(SqlAdapter):
     source = "telegram"
-    conversational = True
+    dialect = "postgres"
+    density = Density.NARRATIVE
 
-    def __init__(self, conn_factory, personal_only: bool = True):
-        self._conn_factory = conn_factory
+    def __init__(self, dsn: str, personal_only: bool = True):
+        super().__init__(dsn)
         self.personal_only = personal_only
 
     def fetch(self, since: datetime | None = None,
@@ -44,10 +45,7 @@ class TelegramAdapter(Adapter):
             ORDER BY date, chat_id, msg_id
         """
         params = {"since": since, "until": until, "personal": self.personal_only}
-        with self._conn_factory() as conn, conn.cursor(name="tg_stream") as cur:
-            cur.itersize = BATCH
-            cur.execute(sql, params)
-            for row in cur:
+        for row in self._stream(sql, params):
                 (chat_id, msg_id, chat_title, chat_type, sender_name,
                  date, text, media_type, reply_to_id, direction) = row
                 yield SourceEvent(
@@ -64,9 +62,5 @@ class TelegramAdapter(Adapter):
                         "chat_type": chat_type,
                         "media_type": media_type,
                         "direction": direction,
-                        # thread_key groups events for segmentation. For
-                        # Telegram that is the chat; other sources use
-                        # project, device, or a constant.
-                        "thread_key": str(chat_id),
                     },
                 )

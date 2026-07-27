@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
-INSERT INTO source(source, conversational) VALUES ('telegram', TRUE), ('wakapi', FALSE);
+INSERT INTO source(source, density, tier) VALUES ('telegram','narrative',1), ('wakapi','telemetry',1);
 INSERT INTO person(display_name, telegram_user_id, is_self, phonetic_keys, skeleton_keys)
 VALUES ('me', 1, TRUE, '{}', '{}'), ('Аня', 2, FALSE, '{"an"}', '{}');
 

@@ -18,7 +18,7 @@ import logging
 from datetime import datetime
 from typing import Iterator
 
-from .base import Adapter, SourceEvent, register
+from .base import Density, SourceEvent, SqlAdapter, register
 
 log = logging.getLogger(__name__)
 
@@ -29,12 +29,13 @@ STAY_MIN_MINUTES = 20
 
 
 @register
-class DawarichAdapter(Adapter):
+class DawarichAdapter(SqlAdapter):
     source = "dawarich"
-    conversational = False
+    dialect = "postgres"          # PostGIS 17-3.5
+    density = Density.TELEMETRY
 
-    def __init__(self, conn_factory, user_id: int):
-        self._conn_factory = conn_factory
+    def __init__(self, dsn: str, user_id: int):
+        super().__init__(dsn)
         self.user_id = user_id
 
     def fetch(self, since: datetime | None = None,
@@ -73,10 +74,7 @@ class DawarichAdapter(Adapter):
             "eps": STAY_RADIUS_M * 1e-5,
             "mins": STAY_MIN_MINUTES,
         }
-        with self._conn_factory() as conn, conn.cursor(name="dawarich_stream") as cur:
-            cur.itersize = 2_000
-            cur.execute(sql, params)
-            for cid, started, ended, n_points, lat, lon in cur:
+        for cid, started, ended, n_points, lat, lon in self._stream(sql, params):
                 minutes = int((ended - started).total_seconds() // 60)
                 yield SourceEvent(
                     source=self.source,
@@ -94,6 +92,6 @@ class DawarichAdapter(Adapter):
                         # It is an enrichment step, and enrichment belongs in
                         # the worker where it can be retried and versioned.
                         "place_name": None,
-                        "thread_key": "dawarich:stays",
                     },
+                    thread_key="dawarich:stays",
                 )
