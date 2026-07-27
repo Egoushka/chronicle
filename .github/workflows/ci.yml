@@ -1,0 +1,31 @@
+name: ci
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pytest numpy ruff
+      - run: PYTHONPATH=. python -m pytest tests/ -q
+      - run: ruff check chronicle/ tests/ || true
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      # pgvector >= 0.7 required: halfvec does not exist in 0.6.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env: { POSTGRES_PASSWORD: postgres }
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: apply migrations and smoke-test every function
+        env: { PGPASSWORD: postgres, PGHOST: localhost, PGUSER: postgres }
+        run: ./scripts/smoke.sh
