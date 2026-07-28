@@ -52,6 +52,7 @@ class OwnTracksAdapter(FileAdapter):
                 actor="me", kind="stay", thread_key="owntracks:stays",
                 payload={"lat": lat, "lon": lon, "minutes": mins,
                          "points": len(buf), "ended_at": end.isoformat()},
+                watermark_ts=end,
             )
 
         for path in self._iter_files():

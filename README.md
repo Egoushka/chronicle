@@ -157,10 +157,28 @@ that bites hardest at the ~1%-cardinality date ranges you query most.
 
 ```bash
 git clone <this repo> chronicle && cd chronicle
-make test                     # 45 unit tests, no DB or models needed
+make test                     # 57 unit tests, no DB or models needed
 cp .env.example .env          # fill in, then `make encrypt STACK=chronicle` in homelab
 make smoke                    # migrations + every SQL function, throwaway DB
+
+make doctor                   # ← ALWAYS. validates sources before you ingest
+make ingest                   # sources -> event -> episode -> embedding
+make eval-init && make eval   # chronicle vs ripgrep, on your questions
 ```
+
+### `make doctor` is not optional
+
+Two adapter assumptions were already wrong on first contact — wakapi is SQLite
+not Postgres, firefly is MariaDB with amounts on `transactions` — and each
+would have surfaced hours into a backfill, after the worker had written wrong
+rows. Doctor finds that class of problem in ~10 seconds, read-only.
+
+It checks: driver reachability, timestamps that are actually datetimes (SQLite
+returns TEXT), ascending order, duplicate ids, unaggregated telemetry, empty
+narrative text, degenerate `thread_key`, and import-time-masquerading-as-
+event-time (the immich `createdAt` vs EXIF `dateTimeOriginal` trap). Run it
+again after upgrading any source stack — an upstream migration is exactly what
+breaks an adapter quietly.
 
 Deploy: see [`docs/DEPLOY.md`](docs/DEPLOY.md). Short version — clone into
 `/srv/stacks/chronicle`, resolve the `chronicle-db` digest into `PINS.md`,
@@ -189,8 +207,9 @@ but have only been run against fixtures — verify each one against your data
 before trusting its output. The API adapters take an injected `fetch_page`
 callable and need wiring to the corresponding MCP tool.
 
-Stubbed: `api.py`, `worker.py`, `embed.py` — the FastAPI handlers and the batch
-enrichment loop. The hard parts are done; these are wiring.
+Stubbed: only `worker.py enrich` — the local-LLM pass for summaries, topics and
+facts. Everything else runs. Enrichment is deliberately last: retrieval works
+without it, so ship and measure before spending weeks of CPU there.
 
-Tested: 45 unit tests, plus migrations and every SQL function exercised
+Tested: 57 unit tests, plus migrations and every SQL function exercised
 against real PostgreSQL 16 + pgvector 0.8.0 in CI.

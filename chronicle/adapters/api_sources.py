@@ -69,6 +69,7 @@ class LastfmAdapter(ApiAdapter):
                          "artists": sorted(set(artists))[:30],
                          "ended_at": end.isoformat(),
                          "hour": start.hour},
+                watermark_ts=end,
             )
 
         for t in sorted(tracks, key=lambda x: x["played_at"]):

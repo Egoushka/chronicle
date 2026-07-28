@@ -191,3 +191,148 @@ def test_dawarich_and_owntracks_conflict_is_detected():
 def test_ambient_sources_are_last():
     for p in enabled(Tier.CORE) + enabled(Tier.BEHAVIOUR):
         assert p.density is not Density.AMBIENT
+
+
+# --------------------------------------------------------------------------
+#  doctor — catch adapter/schema mismatches BEFORE a multi-week backfill
+# --------------------------------------------------------------------------
+
+def test_doctor_reports_unconfigured_sources_as_skip_not_fail(monkeypatch):
+    from chronicle.doctor import SKIP, run
+    for k in list(__import__("os").environ):
+        if k.endswith("_DB_URL") or k.endswith("_DB_PATH"):
+            monkeypatch.delenv(k, raising=False)
+    rep = run(Tier.CORE)
+    assert all(c.status == SKIP for c in rep.checks)
+    assert rep.exit_code == 0, "an unconfigured source is not an error"
+
+
+def test_doctor_accepts_a_healthy_source(wakapi_db, monkeypatch):
+    from chronicle.doctor import OK, WARN, check_source
+    monkeypatch.setenv("WAKAPI_DB_PATH", wakapi_db)
+    monkeypatch.setenv("WAKAPI_USER", "yehor")
+    got = check_source("wakapi")
+    assert got.status in (OK, WARN), got.detail
+    assert got.sample is not None
+
+
+def test_doctor_catches_unaggregated_telemetry(tmp_path, monkeypatch):
+    """The wrong-unit mistake reappearing at the source layer.
+
+    If a TELEMETRY adapter emits raw points instead of rolled-up spans, the
+    archive floods. doctor must catch that before the worker runs.
+    """
+    from chronicle.adapters import Density
+    from chronicle.doctor import _validate
+    from chronicle.adapters import SourceEvent
+
+    raw = [SourceEvent(source="fake", source_id=str(i),
+                       ts=datetime(2026, 3, 1) + timedelta(seconds=10 * i))
+           for i in range(20)]
+    problems = _validate("fake", raw, Density.TELEMETRY)
+    assert any("not rolling up" in p for p in problems), problems
+
+
+def test_doctor_catches_text_timestamps(tmp_path):
+    """The SQLite bug that cost a debugging cycle."""
+    from chronicle.adapters import Density, SourceEvent
+    from chronicle.doctor import _validate
+
+    rows = [SourceEvent(source="f", source_id=str(i), ts="2026-03-01 09:00:00")
+            for i in range(5)]
+    problems = _validate("f", rows, Density.DISCRETE)
+    assert any("not datetime" in p for p in problems), problems
+
+
+def test_doctor_catches_import_time_masquerading_as_event_time():
+    """The immich bug: createdAt (upload) vs EXIF dateTimeOriginal (capture)."""
+    from chronicle.adapters import Density, SourceEvent
+    from chronicle.doctor import _validate
+
+    # every 'historical' photo landing within one minute = import timestamp
+    base = datetime(2026, 7, 1, 12, 0)
+    rows = [SourceEvent(source="immich", source_id=str(i),
+                        ts=base + timedelta(seconds=i))
+            for i in range(15)]
+    problems = _validate("immich", rows, Density.DISCRETE)
+    assert any("import time" in p for p in problems), problems
+
+
+def test_doctor_catches_duplicate_source_ids():
+    from chronicle.adapters import Density, SourceEvent
+    from chronicle.doctor import _validate
+
+    rows = [SourceEvent(source="f", source_id="same",
+                        ts=datetime(2026, 3, 1) + timedelta(hours=i))
+            for i in range(4)]
+    problems = _validate("f", rows, Density.DISCRETE)
+    assert any("duplicate source_id" in p for p in problems), problems
+
+
+def test_doctor_catches_out_of_order_events():
+    from chronicle.adapters import Density, SourceEvent
+    from chronicle.doctor import _validate
+
+    rows = [SourceEvent(source="f", source_id=str(i), ts=datetime(2026, 3, 10 - i))
+            for i in range(5)]
+    problems = _validate("f", rows, Density.DISCRETE)
+    assert any("ascending" in p for p in problems), problems
+
+
+def test_doctor_diagnoses_known_driver_errors():
+    from chronicle.doctor import _diagnose
+    assert "pymysql" in _diagnose("firefly", ImportError("No module named 'pymysql'"))
+    assert "coerce_ts" in _diagnose("wakapi", TypeError(
+        "unsupported operand type(s) for -: 'str' and 'str'"))
+    assert "schema mismatch" in _diagnose("immich", Exception('relation "assets" does not exist'))
+
+
+# --------------------------------------------------------------------------
+#  resume watermark — the bug that silently duplicated data on every run
+# --------------------------------------------------------------------------
+
+def test_rollup_watermark_is_span_end_not_span_start(wakapi_db):
+    """Regression: a second ingest produced a spurious 4th coding session.
+
+    Rollup adapters emit ts = span START. If the worker resumes from that,
+    every upstream row inside the span is re-read next run and forms a NEW
+    partial span with a DIFFERENT source_id — so `ON CONFLICT DO NOTHING`
+    does not catch it and the duplicate accumulates on every scheduled run.
+    """
+    events = list(WakapiAdapter(wakapi_db, user="yehor").fetch())
+    assert events, "fixture produced nothing"
+    for e in events:
+        assert e.watermark_ts is not None
+        assert e.watermark_ts > e.ts, \
+            "a rolled-up span must advance the watermark past its own start"
+        assert e.watermark_ts.isoformat() == e.payload["ended_at"]
+
+
+def test_resume_from_watermark_yields_nothing_new(wakapi_db):
+    ad = WakapiAdapter(wakapi_db, user="yehor")
+    first = list(ad.fetch())
+    high = max(e.watermark_ts for e in first)
+    again = list(ad.fetch(since=high))
+    assert again == [], f"resume re-emitted {len(again)} events"
+
+
+def test_plain_events_default_watermark_to_ts():
+    from chronicle.adapters import SourceEvent
+    e = SourceEvent(source="s", source_id="1", ts=datetime(2026, 1, 1))
+    assert e.watermark_ts == e.ts
+
+
+def test_substantive_filter_is_narrative_only():
+    """Regression: telemetry episodes were all marked non-substantive and so
+    were invisible to every query, because the filler-burst heuristic was
+    written for Telegram and applied to everything."""
+    from chronicle.worker import _substantive
+    # a wakapi row: one event, 38 chars — fails the narrative heuristic
+    row = ("wakapi", "p:1", datetime(2026, 6, 1), "me",
+           "coded on chronicle for 48 min (Python)", None, None, None, None)
+    assert _substantive([row]) is False, "heuristic itself is unchanged"
+    # ...which is why worker.cmd_segment only applies it when density=narrative.
+    import inspect
+    from chronicle import worker
+    src = inspect.getsource(worker.cmd_segment)
+    assert 'density == "narrative" else True' in src

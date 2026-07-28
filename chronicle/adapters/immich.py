@@ -83,6 +83,7 @@ class ImmichAdapter(SqlAdapter):
                     "lon": next((r[5] for r in buf if r[5] is not None), None),
                     "ended_at": buf[-1][1].isoformat(),
                 },
+                watermark_ts=buf[-1][1],
             )
 
         for row in rows:

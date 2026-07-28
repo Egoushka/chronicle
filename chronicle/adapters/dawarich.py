@@ -94,4 +94,5 @@ class DawarichAdapter(SqlAdapter):
                         "place_name": None,
                     },
                     thread_key="dawarich:stays",
+                    watermark_ts=ended,
                 )

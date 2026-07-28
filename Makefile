@@ -19,3 +19,15 @@ migrate:   ## apply migrations to $CHRONICLE_DB_URL
 
 smoke:     ## migrations + function smoke test against a throwaway DB
 	./scripts/smoke.sh
+
+doctor:    ## validate configured sources BEFORE ingesting (run this first)
+	python3 -m chronicle.doctor --tier $${TIER:-1}
+
+ingest:    ## sources -> event -> episode -> embedding
+	python3 -m chronicle.worker all --tier $${TIER:-1}
+
+eval-init: ## write the question template you must fill in by hand
+	python3 -m chronicle.evaluate init
+
+eval:      ## chronicle vs ripgrep on your own questions
+	python3 -m chronicle.evaluate compare

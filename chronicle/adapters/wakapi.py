@@ -81,6 +81,7 @@ class WakapiAdapter(SqlAdapter):
                     "ended_at": last.isoformat(),
                 },
                 thread_key=f"wakapi:{cur_project}",
+                watermark_ts=last,   # span END, not start — see SourceEvent.watermark_ts
             )
 
         for raw_ts, project, language, entity, _branch in rows:

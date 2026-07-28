@@ -95,6 +95,21 @@ class SourceEvent:
     #: project, calendar uses a constant. Never None — segmentation needs it.
     thread_key: str = "default"
 
+    #: Resume watermark. Defaults to `ts`, but ROLLUP adapters must set it to
+    #: the END of the aggregated span.
+    #:
+    #: Without this the worker resumes from the span's START, so on the next
+    #: run every upstream row inside that span is re-read and forms a NEW
+    #: partial span. Measured: a second no-op ingest of 75 wakapi heartbeats
+    #: produced a 4th spurious coding session. The duplicate has a different
+    #: source_id, so ON CONFLICT DO NOTHING does not catch it — it silently
+    #: accumulates on every scheduled run.
+    watermark_ts: datetime | None = None
+
+    def __post_init__(self):
+        if self.watermark_ts is None:
+            self.watermark_ts = self.ts
+
     def dedupe_key(self) -> str:
         return f"{self.source}:{self.source_id}"
 
