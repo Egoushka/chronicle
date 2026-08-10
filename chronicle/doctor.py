@@ -42,6 +42,12 @@ log = logging.getLogger(__name__)
 
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 
+#: A rolled-up TELEMETRY event longer than this is a failed aggregation, not
+#: an episode. Set above a weekend indoors (measured max legitimate dawarich
+#: stay: 3,312 min = 2.3 days) and well below the failure it exists to catch
+#: (19,163 min = 13.3 days, every visit to one place merged into one event).
+MAX_ROLLUP_SPAN = timedelta(days=3)
+
 
 @dataclass
 class Check:
@@ -240,11 +246,38 @@ def _validate(source: str, rows: list, density: Density) -> list[str]:
         if empty > len(rows) * 0.5:
             problems.append(f"{empty}/{len(rows)} narrative events have empty text")
 
-    # 7. thread_key drives segmentation; a constant one merges everything.
-    if density is Density.NARRATIVE and len({r.thread_key for r in rows}) == 1 \
-            and len(rows) >= 20:
-        problems.append("all events share one thread_key — segmentation cannot "
-                        "separate conversations")
+    # 7. thread_key drives segmentation; an UNSET one merges everything.
+    #
+    #    The bug this catches is an adapter that never assigns thread_key, so
+    #    every row falls back to the SourceEvent default and one fitted gap
+    #    spans every conversation in the source. telegram did exactly that
+    #    with all 682,099 rows across 491 chats.
+    #
+    #    It deliberately does NOT fire on a constant-but-derived key. forgejo
+    #    yields `forgejo:homelab-gitops` for all 87 of its actions because the
+    #    forge holds exactly one repository — nothing is being wrongly merged,
+    #    and the warning would stand until a second repo appeared.
+    if density is Density.NARRATIVE and {r.thread_key for r in rows} == {"default"}:
+        problems.append("no event sets thread_key, so all of them landed in the "
+                        "default thread — segmentation cannot separate "
+                        "conversations")
+
+    # 8. A rollup measured in DAYS is a failed aggregation wearing an
+    #    episode's clothes. dawarich grouped stays by spatial cluster alone,
+    #    so every visit to the same place merged into one event of 19,163
+    #    minutes — 13.3 days, the entire span of the data. Checks 1-7 all
+    #    passed it: the timestamps were real, ordered, unique and rolled up.
+    #    Only the SPAN gave it away.
+    if density is Density.TELEMETRY:
+        spans = [r.watermark_ts - r.ts for r in rows
+                 if isinstance(r.ts, datetime)
+                 and isinstance(r.watermark_ts, datetime)]
+        overlong = [s for s in spans if s > MAX_ROLLUP_SPAN]
+        if overlong:
+            problems.append(f"{len(overlong)}/{len(rows)} rolled-up events span "
+                            f"more than {MAX_ROLLUP_SPAN} (worst {max(overlong)}) "
+                            "— the aggregation key has no time dimension, so "
+                            "repeat visits to one place merged into one event")
     return problems
 
 
@@ -263,7 +296,14 @@ def _diagnose(source: str, exc: Exception) -> str:
                 "table layout than the adapter expects. Check its version, then "
                 "fix the query in the adapter — do not guess.")
     if "unable to open database" in msg:
-        return "SQLite path wrong, or the volume is not mounted into this container"
+        # Two very different causes, and the second is not obvious. A WAL
+        # database needs to create a -shm file for locking even when the
+        # connection itself is mode=ro, so a `:ro` BIND MOUNT fails while the
+        # same file on a read-write mount opens fine. telegram.db is WAL.
+        return ("SQLite path wrong, or the volume is not mounted — and if the "
+                "file is WAL (PRAGMA journal_mode), a `:ro` bind mount also "
+                "fails: WAL needs to create -shm. Mount the directory rw and "
+                "let the `mode=ro` URI enforce read-only.")
     if "connection refused" in msg or "could not connect" in msg:
         return "host unreachable — is the stack up, and is chronicle on its network?"
     if "password authentication failed" in msg:

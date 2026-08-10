@@ -14,7 +14,7 @@ heartbeats would reproduce the per-message indexing mistake in a new form.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterator
 
 from .base import Density, SourceEvent, SqlAdapter, coerce_ts, register
@@ -25,6 +25,29 @@ log = logging.getLogger(__name__)
 #: Wakatime's own convention is 15 minutes; keeping it aligned means
 #: Chronicle's numbers reconcile with the Wakapi UI.
 HEARTBEAT_GAP = timedelta(minutes=15)
+
+
+def _bound(dt: datetime | None) -> str | None:
+    """Render a datetime the way wakapi's Go driver stores it.
+
+    `heartbeats.time` is declared `timestamp` but SQLite has no date type, so
+    the live rows are TEXT: '2026-06-17 13:01:41+00:00' and
+    '2026-06-18 08:55:59.852+00:00' — SPACE separator, optional fraction,
+    '+00:00' suffix. `time > :since` is therefore a string comparison.
+
+    Binding a datetime instead leaned on sqlite3's default adapter, which is
+    deprecated in 3.12 and slated for removal — and which emits no offset, so
+    the two formats only compared correctly by accident ('+' sorts below both
+    '.' and every digit). Formatting here makes it deliberate.
+
+    Note the separator differs from the telegram adapter's 'T'. The bound must
+    match ITS OWN source's storage format; there is no shared one.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(sep=" ")
 
 
 @register
@@ -51,7 +74,7 @@ class WakapiAdapter(SqlAdapter):
               AND (%(until)s IS NULL OR time <= %(until)s)
             ORDER BY time
         """
-        params = {"user": self.user, "since": since, "until": until}
+        params = {"user": self.user, "since": _bound(since), "until": _bound(until)}
         yield from self._rollup(self._stream(sql, params))
 
     def _rollup(self, rows) -> Iterator[SourceEvent]:

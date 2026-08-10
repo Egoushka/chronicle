@@ -14,7 +14,10 @@ import pytest
 from chronicle.adapters import ADAPTERS, Density
 from chronicle.adapters.base import (_ordered_params, _parse_mysql_dsn,
                                      _to_qmark, ingest_all)
+from chronicle.adapters.firefly import _money
+from chronicle.adapters.forgejo import _describe
 from chronicle.adapters.owntracks import OwnTracksAdapter
+from chronicle.adapters.telegram import TelegramAdapter, _bound
 from chronicle.adapters.wakapi import WakapiAdapter
 from chronicle.sources import BY_SOURCE, NOT_SOURCES, Tier, conflicts, enabled
 
@@ -49,18 +52,25 @@ def wakapi_db(tmp_path) -> str:
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE heartbeats (user_id TEXT, time TIMESTAMP, "
                  "project TEXT, language TEXT, entity TEXT, branch TEXT)")
-    base = datetime(2026, 3, 1, 9, 0)
+    base = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+
+    def stored(dt: datetime) -> str:
+        # What wakapi's Go driver actually writes: TEXT, space separator,
+        # '+00:00' suffix. Declaring the column TIMESTAMP changes nothing —
+        # SQLite has no date type.
+        return dt.isoformat(sep=" ")
+
     rows = []
     # two coding blocks on the same project, separated by a 2h break
     for i in range(30):
-        rows.append(("yehor", base + timedelta(minutes=2 * i), "chronicle",
+        rows.append(("yehor", stored(base + timedelta(minutes=2 * i)), "chronicle",
                      "Python", f"f{i%4}.py", "main"))
     for i in range(20):
-        rows.append(("yehor", base + timedelta(hours=3, minutes=2 * i),
+        rows.append(("yehor", stored(base + timedelta(hours=3, minutes=2 * i)),
                      "chronicle", "Python", "api.py", "main"))
     # a different project
     for i in range(10):
-        rows.append(("yehor", base + timedelta(hours=6, minutes=2 * i),
+        rows.append(("yehor", stored(base + timedelta(hours=6, minutes=2 * i)),
                      "acme", "C#", "Handler.cs", "main"))
     conn.executemany("INSERT INTO heartbeats VALUES (?,?,?,?,?,?)", rows)
     conn.commit()
@@ -85,11 +95,158 @@ def test_wakapi_rolls_heartbeats_into_sessions(wakapi_db):
     assert events[-1].thread_key == "wakapi:acme"
 
 
+def test_sqlite_bounds_match_their_own_source_format():
+    """Two SQLite sources, two incompatible TEXT layouts. Do not unify them.
+
+    wakapi stores '2026-03-01 09:00:00+00:00' (space); telegram stores
+    '2026-03-01T09:00:00+00:00' (T). ' ' is 0x20 and 'T' is 0x54, so using
+    one source's bound on the other makes `since` compare against every row
+    the wrong way and resume silently re-reads or skips the archive.
+    """
+    from chronicle.adapters.telegram import _bound as tg_bound
+    from chronicle.adapters.wakapi import _bound as wk_bound
+
+    when = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+    assert wk_bound(when) == "2026-03-01 09:00:00+00:00"
+    assert tg_bound(when) == "2026-03-01T09:00:00+00:00"
+    assert wk_bound(None) is None and tg_bound(None) is None
+    # naive input is UTC, not local — the archive spans 7.6 years of DST
+    assert wk_bound(datetime(2026, 3, 1, 9, 0)) == wk_bound(when)
+
+
 def test_wakapi_is_telemetry_so_it_is_not_segmented(wakapi_db):
     ad = WakapiAdapter(wakapi_db, user="yehor")
     assert ad.density is Density.TELEMETRY
     assert ad.conversational is False, \
         "gap-fitting telemetry produces meaningless thresholds"
+
+
+# --------------------------------------------------------------------------
+#  telegram — SQLite as well, with TEXT timestamps that must sort correctly
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def telegram_db(tmp_path) -> str:
+    """Mirrors the live telegram-sync schema, verbatim.
+
+    `date` is TEXT and every one of the 682,099 real rows is exactly
+    'YYYY-MM-DDTHH:MM:SS+00:00' (verified: length(date)=25 for 100% of rows).
+    The fixture stores the same shape, because the bug this guards is a
+    STRING comparison, and it only reproduces with the real format.
+    """
+    db = tmp_path / "telegram.db"
+    conn = sqlite3.connect(db)
+    conn.execute("""CREATE TABLE messages (
+        id INTEGER, chat_id INTEGER, chat_title TEXT, chat_type TEXT,
+        sender_id INTEGER, sender_name TEXT, text TEXT, date TEXT,
+        is_outgoing INTEGER, reply_to_id INTEGER, synced_at TEXT,
+        media_type TEXT, PRIMARY KEY (chat_id, id))""")
+    conn.execute("""CREATE VIEW v_messages AS SELECT
+        m.chat_id, m.id AS msg_id, m.chat_title, m.chat_type, m.sender_name,
+        m.date, m.text, m.media_type, m.reply_to_id,
+        CASE WHEN m.is_outgoing = 1 THEN 'sent' ELSE 'received' END AS direction
+        FROM messages m""")
+    base = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+    rows = []
+    for chat in (111, 222):
+        for i in range(10):
+            ts = (base + timedelta(minutes=i)).isoformat()
+            rows.append((i, chat, f"chat{chat}", "user", 1, "Yehor",
+                         f"msg {i}", ts, i % 2, None, ts, None))
+    conn.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    conn.commit()
+    conn.close()
+    return str(db)
+
+
+def test_telegram_is_sqlite_not_postgres():
+    # telegram-sync has no Postgres at all: compose.yaml mounts ./data and the
+    # only other store is Qdrant. Assuming otherwise made doctor fail with
+    # `missing "=" after "/srv/telegram/telegram.db" in connection info`.
+    assert TelegramAdapter.dialect == "sqlite"
+
+
+def test_telegram_bound_matches_the_stored_text_format():
+    got = _bound(datetime(2026, 3, 1, 9, 0))
+    assert got == "2026-03-01T09:00:00+00:00"
+    # sqlite3's own adapter would render '2026-03-01 09:00:00'. ' ' < 'T', so
+    # that bound sorts before every stored row and `since` stops filtering.
+    assert "T" in got and got.endswith("+00:00")
+
+
+def test_telegram_since_filter_actually_filters(telegram_db):
+    ad = TelegramAdapter(telegram_db)
+    everything = list(ad.fetch())
+    assert len(everything) == 20
+
+    high = max(e.watermark_ts for e in everything)
+    assert list(ad.fetch(since=high)) == [], \
+        "resume re-read the archive — the TEXT bound is not comparing"
+
+    midpoint = everything[len(everything) // 2].ts
+    assert 0 < len(list(ad.fetch(since=midpoint))) < 20
+
+
+def test_telegram_timestamps_are_datetimes_not_text(telegram_db):
+    events = list(TelegramAdapter(telegram_db).fetch())
+    assert all(isinstance(e.ts, datetime) for e in events)
+    assert all(e.ts.tzinfo is not None for e in events), \
+        "event.ts is TIMESTAMPTZ; naive values would be read as local time"
+
+
+def test_telegram_thread_key_partitions_by_chat(telegram_db):
+    """Regression: telegram was the only adapter that never set thread_key.
+
+    All 682,099 events would land in the default thread, so fit_thread_gaps
+    would fit ONE gap across 491 conversations and segmentation would merge
+    unrelated chats by time proximity — which is the entire point of the
+    project.
+    """
+    events = list(TelegramAdapter(telegram_db).fetch())
+    assert {e.thread_key for e in events} == {"telegram:111", "telegram:222"}
+
+
+# --------------------------------------------------------------------------
+#  forgejo — the activity feed, whose `content` is JSON and not prose
+# --------------------------------------------------------------------------
+
+def test_forgejo_extracts_commit_messages_from_the_json_envelope():
+    """A push stores an envelope, not a sentence.
+
+    forgejo is NARRATIVE because commit MESSAGES are deliberate text.
+    Indexing `content` verbatim would embed SHA1 hashes and author emails
+    and bury the one line that carries meaning.
+    """
+    content = json.dumps({"Commits": [
+        {"Sha1": "bdd7b53", "Message": "fix(listmonk): drop unused env vars",
+         "AuthorEmail": "sam@example.com"},
+        {"Sha1": "0f5ce5f", "Message": "chore: scope the SMTP key"},
+    ]})
+    got = _describe(content, 5)
+    assert got == "fix(listmonk): drop unused env vars; chore: scope the SMTP key"
+    assert "Sha1" not in got and "@" not in got
+
+
+def test_forgejo_falls_back_to_a_name_never_a_bare_op_type():
+    # Measured: 1 of 87 live rows is a push with empty content. `content or
+    # op_type` put the integer 5 into indexed text.
+    assert _describe("", 5) == "pushed"
+    assert _describe(None, 11) == "merged pull request"
+    assert _describe("", 99) == "action 99"
+    # Non-JSON content is already prose (an issue title, a comment body).
+    assert _describe("Fix the flaky test", 10) == "Fix the flaky test"
+
+
+# --------------------------------------------------------------------------
+#  firefly — decimal(32,12), which the driver hands back in full
+# --------------------------------------------------------------------------
+
+def test_firefly_amount_drops_the_padding_zeros():
+    # '55.000000000000 UAH' is what goes into the embedding otherwise.
+    assert _money("55.000000000000") == "55"
+    assert _money("55.500000000000") == "55.5"
+    assert _money("0.010000000000") == "0.01"
+    assert _money("-1234.560000000000") == "-1234.56"
 
 
 # --------------------------------------------------------------------------
@@ -279,12 +436,63 @@ def test_doctor_catches_out_of_order_events():
     assert any("ascending" in p for p in problems), problems
 
 
+def test_doctor_catches_an_unset_thread_key_but_not_a_single_thread():
+    """The bug is an adapter that never ASSIGNS thread_key, not one thread.
+
+    telegram left all 682,099 rows on the SourceEvent default, so one fitted
+    gap spanned 491 chats. forgejo legitimately yields one key for all 87 of
+    its actions because the forge holds exactly one repository — warning
+    about that would just be noise until a second repo showed up.
+    """
+    from chronicle.adapters import Density, SourceEvent
+    from chronicle.doctor import _validate
+
+    base = datetime(2026, 3, 1, tzinfo=timezone.utc)
+
+    def rows(key):
+        return [SourceEvent(source="s", source_id=str(i), text="x",
+                            ts=base + timedelta(minutes=i), thread_key=key)
+                for i in range(25)]
+
+    problems = _validate("telegram", rows("default"), Density.NARRATIVE)
+    assert any("default thread" in p for p in problems), problems
+    assert not _validate("forgejo", rows("forgejo:homelab-gitops"),
+                         Density.NARRATIVE)
+
+
+def test_doctor_catches_overlong_rollups():
+    """Regression: dawarich grouped stays by spatial cluster alone.
+
+    Every visit to the same place merged into one event of 19,163 minutes —
+    13.3 days, the whole span of the data. Checks 1-7 all passed it: the
+    timestamps were real, ordered, unique and rolled up. Only the span was
+    wrong, so the span is what this checks.
+    """
+    from chronicle.adapters import Density, SourceEvent
+    from chronicle.doctor import _validate
+
+    base = datetime(2026, 6, 17, tzinfo=timezone.utc)
+    rows = [SourceEvent(source="dawarich", source_id="1", ts=base,
+                        watermark_ts=base + timedelta(minutes=19163))]
+    problems = _validate("dawarich", rows, Density.TELEMETRY)
+    assert any("no time dimension" in p for p in problems), problems
+
+    ok = [SourceEvent(source="dawarich", source_id="1", ts=base,
+                      watermark_ts=base + timedelta(minutes=3312))]
+    assert not _validate("dawarich", ok, Density.TELEMETRY), \
+        "2.3 days is a weekend indoors, not a failed aggregation"
+
+
 def test_doctor_diagnoses_known_driver_errors():
     from chronicle.doctor import _diagnose
     assert "pymysql" in _diagnose("firefly", ImportError("No module named 'pymysql'"))
     assert "coerce_ts" in _diagnose("wakapi", TypeError(
         "unsupported operand type(s) for -: 'str' and 'str'"))
     assert "schema mismatch" in _diagnose("immich", Exception('relation "assets" does not exist'))
+    # A `:ro` bind mount of a WAL database fails to open at all, because WAL
+    # must create a -shm file even for a mode=ro connection. telegram.db is
+    # WAL, and the old hint sent you looking for a wrong path instead.
+    assert "WAL" in _diagnose("telegram", Exception("unable to open database file"))
 
 
 # --------------------------------------------------------------------------

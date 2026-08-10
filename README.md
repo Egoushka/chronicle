@@ -157,11 +157,12 @@ that bites hardest at the ~1%-cardinality date ranges you query most.
 
 ```bash
 git clone <this repo> chronicle && cd chronicle
-make test                     # 57 unit tests, no DB or models needed
+make test                     # 68 unit tests; bootstraps .venv, no DB or models
 cp .env.example .env          # fill in, then `make encrypt STACK=chronicle` in homelab
 make smoke                    # migrations + every SQL function, throwaway DB
 
 make doctor                   # ← ALWAYS. validates sources before you ingest
+make doctor-homelab TIER=2    # ← the real one: sources live ON the box
 make ingest                   # sources -> event -> episode -> embedding
 make eval-init && make eval   # chronicle vs ripgrep, on your questions
 ```

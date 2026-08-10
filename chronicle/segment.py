@@ -287,7 +287,7 @@ def _merge_runts(episodes: list[Episode], merge_below: int, max_messages: int) -
 # ============================================================================
 
 def build_embed_text(
-    session: Session,
+    session: Episode,
     chat_title: str,
     participant_names: Sequence[str],
     facts: Sequence[str] = (),
