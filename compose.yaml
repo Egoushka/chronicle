@@ -34,8 +34,23 @@ services:
       # Model cache. Without this every restart re-downloads ~2.2 GB of BGE-M3.
       - chronicle_models:/models
 
-    mem_limit: 2g
-    memswap_limit: 2g
+    # 2g was not enough and the failure was invisible: /health passed, /stats
+    # passed, and every /recall silently OOM-killed uvicorn mid-request. The
+    # client saw a dropped connection, the container restarted, reloaded
+    # BGE-M3, and looked healthy again — so the healthcheck never went red and
+    # autoheal never fired.
+    #
+    # Measured: `Memory cgroup out of memory: Killed process (uvicorn)
+    # anon-rss:2067848kB`, i.e. exactly at the 2g cap, CONSTRAINT_MEMCG. The
+    # model LOADS in well under 2g; it is the first encode() that allocates.
+    # chronicle-worker peaked at 3.885 GiB doing the same encode with an 8g
+    # cap, so 5g is that plus headroom.
+    #
+    # memswap_limit == mem_limit deliberately, per the estate convention: a
+    # cgroup at its cap is OOM-killed rather than swapped, on a box that has
+    # already hit 96% swap.
+    mem_limit: 5g
+    memswap_limit: 5g
     security_opt: [no-new-privileges:true]
 
     healthcheck:
@@ -69,8 +84,17 @@ services:
     memswap_limit: 256m
     security_opt: [no-new-privileges:true]
 
+    # Probes /sse, NOT /health. FastMCP's SSE transport serves /sse and
+    # /messages/ and nothing else — /health 404s, so the old check reported a
+    # perfectly healthy server as unhealthy, and with autoheal=true that is an
+    # infinite restart loop on a service that was working.
+    #
+    # /sse is a stream, so curl never gets a clean exit: -m 3 always ends in
+    # exit 28. The status LINE is what matters, so compare %{http_code}
+    # instead of relying on curl's exit code.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8031/health"]
+      test: ["CMD-SHELL",
+             "test \"$$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://localhost:8031/sse)\" = 200"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -23,7 +23,14 @@ from mcp.server.fastmcp import FastMCP
 log = logging.getLogger(__name__)
 API = os.environ.get("CHRONICLE_API_URL", "http://chronicle-api:8030")
 
-mcp = FastMCP("chronicle")
+# host/port belong on the constructor, not on run(): FastMCP.run() takes only
+# (transport, mount_path). Passing them to run() crash-looped the container
+# with `TypeError: FastMCP.run() got an unexpected keyword argument 'host'`.
+# The default host is 127.0.0.1, which inside a container means nothing
+# outside it can connect — so 0.0.0.0 here is what makes the published
+# 127.0.0.1:8031 mapping reach anything. Exposure is bounded by that port
+# binding and by `edge`, not by this.
+mcp = FastMCP("chronicle", host="0.0.0.0", port=8031)
 _client = httpx.AsyncClient(base_url=API, timeout=120.0)
 
 
@@ -147,4 +154,4 @@ async def ground(claim: str, limit: int = 10) -> str:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    mcp.run(transport="sse", host="0.0.0.0", port=8031)
+    mcp.run(transport="sse")

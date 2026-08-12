@@ -3,7 +3,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
-RUN pip install --no-cache-dir mcp httpx
+# Pinned below 2.0 on purpose. The SDK moved FastMCP out of `mcp.server` in
+# 2.0.0 — `mcp.server` now exposes `mcpserver`, and `mcp.server.fastmcp` is
+# gone — so an unpinned install crash-looped this container with
+# `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. Porting
+# mcp_server.py to the 2.x API is deliberate work, not something an image
+# rebuild should do silently.
+RUN pip install --no-cache-dir 'mcp>=1.2,<2' httpx
 COPY chronicle/ ./chronicle/
 EXPOSE 8031
 CMD ["python", "-m", "chronicle.mcp_server"]
