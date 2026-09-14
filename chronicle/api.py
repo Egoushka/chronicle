@@ -15,9 +15,11 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .embed import Embedder, Lemmatizer
@@ -50,6 +52,18 @@ def q(sql: str, params: tuple = ()) -> list[tuple]:
     with _state["pool"].connection() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+# The browser surface. Served from this app rather than a static host so it
+# shares the API's origin: no CORS middleware, no preflight, and nothing to
+# widen on an API that holds the entire archive. 8030 binds 127.0.0.1 on the
+# box, so reaching this at all means an SSH tunnel.
+_UI = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def ui():
+    return _UI
 
 
 @app.get("/health")
