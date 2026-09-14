@@ -97,7 +97,16 @@ def build(source: str):
 
     if source == "telegram":
         dsn = _env("TELEGRAM_DB_URL")
-        return cls(dsn) if dsn else None
+        if not dsn:
+            return None
+        raw = _env("TELEGRAM_EXCLUDE_CHAT_IDS") or ""
+        ids = tuple(int(p) for p in raw.replace(",", " ").split() if p)
+        # Default ON. An assistant's own chat laundering its output back to it
+        # as "memory" is the failure this prevents, and it is silent — see the
+        # comment in adapters/telegram.py:fetch.
+        nobots = (_env("TELEGRAM_EXCLUDE_BOT_CHATS") or "1").lower() \
+            not in ("0", "false", "no")
+        return cls(dsn, exclude_chat_ids=ids, exclude_bot_chats=nobots)
     if source == "wakapi":
         dsn, user = _env("WAKAPI_DB_PATH", "WAKAPI_DB_URL"), _env("WAKAPI_USER")
         return cls(dsn, user=user) if dsn and user else None

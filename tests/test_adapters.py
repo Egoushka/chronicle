@@ -146,9 +146,31 @@ def telegram_db(tmp_path) -> str:
         m.date, m.text, m.media_type, m.reply_to_id,
         CASE WHEN m.is_outgoing = 1 THEN 'sent' ELSE 'received' END AS direction
         FROM messages m""")
+    # `chats` and `chat_tags` live outside v_messages, which is why a bot
+    # filter has to join. Same columns as the live telegram.db.
+    conn.execute("""CREATE TABLE chats (
+        chat_id INTEGER PRIMARY KEY, title TEXT, type TEXT, username TEXT,
+        included INTEGER, updated_at TEXT)""")
+    conn.execute("""CREATE TABLE chat_tags (
+        chat_id INTEGER NOT NULL, tag TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (chat_id, tag))""")
     base = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
     rows = []
-    for chat in (111, 222):
+    # 111 human. 222 human. 333 a bot by username (Telegram requires every bot
+    # username to end in "bot"). 444 a bot with NO bot-shaped username, reachable
+    # only through telegram-sync's own `chat:bot` tag — BotFather is the real
+    # instance of this. 555 has no `chats` row at all: 33 such orphan chat_ids
+    # carry 1,165 messages in the live database and an INNER JOIN drops them.
+    conn.executemany("INSERT INTO chats VALUES (?,?,?,?,?,?)", [
+        (111, "chat111", "user", "anna", 1, ""),
+        (222, "chat222", "user", "talbot_the_human", 1, ""),
+        (333, "chat333", "user", "jarvis_bot", 1, ""),
+        (444, "chat444", "user", "BotFather", 1, ""),
+    ])
+    conn.execute("INSERT INTO chat_tags (chat_id, tag, source) VALUES (444, 'chat:bot', 'auto')")
+    for chat in (111, 222, 333, 444, 555):
         for i in range(10):
             ts = (base + timedelta(minutes=i)).isoformat()
             rows.append((i, chat, f"chat{chat}", "user", 1, "Yehor",
@@ -175,16 +197,16 @@ def test_telegram_bound_matches_the_stored_text_format():
 
 
 def test_telegram_since_filter_actually_filters(telegram_db):
-    ad = TelegramAdapter(telegram_db)
+    ad = TelegramAdapter(telegram_db, exclude_bot_chats=False)
     everything = list(ad.fetch())
-    assert len(everything) == 20
+    assert len(everything) == 50
 
     high = max(e.watermark_ts for e in everything)
     assert list(ad.fetch(since=high)) == [], \
         "resume re-read the archive — the TEXT bound is not comparing"
 
     midpoint = everything[len(everything) // 2].ts
-    assert 0 < len(list(ad.fetch(since=midpoint))) < 20
+    assert 0 < len(list(ad.fetch(since=midpoint))) < 50
 
 
 def test_telegram_timestamps_are_datetimes_not_text(telegram_db):
@@ -202,8 +224,10 @@ def test_telegram_thread_key_partitions_by_chat(telegram_db):
     unrelated chats by time proximity — which is the entire point of the
     project.
     """
-    events = list(TelegramAdapter(telegram_db).fetch())
-    assert {e.thread_key for e in events} == {"telegram:111", "telegram:222"}
+    events = list(TelegramAdapter(telegram_db, exclude_bot_chats=False).fetch())
+    assert {e.thread_key for e in events} == {
+        "telegram:111", "telegram:222", "telegram:333",
+        "telegram:444", "telegram:555"}
 
 
 # --------------------------------------------------------------------------
@@ -557,3 +581,59 @@ def test_dawarich_eps_is_the_dbscan_radius_not_a_plural_of_segment():
            / "chronicle" / "adapters" / "dawarich.py").read_text()
     assert "%(eps)s" in src, "dawarich lost its DBSCAN epsilon bind parameter"
     assert '"eps"' in src, "the %(eps)s bind has no matching dict key"
+
+
+def test_telegram_excludes_bot_chats_by_default(telegram_db):
+    """A bot DM is a chat_type='user' chat, so `personal_only` never kept bots
+    out — chat_type is 'user' for 100% of the 690,177 live rows.
+
+    Without this filter an assistant's own Telegram chat flows telegram-sync ->
+    chronicle -> back to the assistant through chronicle's MCP, and it reads
+    its own output as external memory about Yehor. sources.py NOT_SOURCES
+    already blocks tg-assistant, agent-runner and hindsight at the STACK level;
+    this is the same rule one level down, at the ROW.
+    """
+    threads = {e.thread_key for e in TelegramAdapter(telegram_db).fetch()}
+    assert "telegram:333" not in threads, "bot-shaped username was not excluded"
+    assert "telegram:444" not in threads, "`chat:bot`-tagged chat was not excluded"
+    assert {"telegram:111", "telegram:222"} <= threads, "human chats were dropped"
+
+
+def test_telegram_bot_exclusion_needs_both_signals(telegram_db):
+    """Neither signal is a superset of the other, measured on the live archive:
+    92 chats match the username rule, 29 carry the `chat:bot` tag, and the
+    overlap is partial — the tag reaches BotFather and Crypto Bot, which have
+    no bot-shaped username at all."""
+    ids = {int(t.split(":")[1]) for t in
+           {e.thread_key for e in TelegramAdapter(telegram_db).fetch()}}
+    assert 333 not in ids, "username rule contributes nothing"
+    assert 444 not in ids, "chat:bot tag contributes nothing"
+
+
+def test_telegram_keeps_chats_with_no_chats_row(telegram_db):
+    """LEFT JOIN, never INNER. 33 chat_ids in the live `messages` table have no
+    `chats` row and carry 1,165 messages between them; an inner join deletes
+    them silently, which is data loss wearing a filter's clothes."""
+    threads = {e.thread_key for e in TelegramAdapter(telegram_db).fetch()}
+    assert "telegram:555" in threads, \
+        "orphan chat_id dropped — the join went INNER"
+
+
+def test_telegram_explicit_chat_id_exclusion(telegram_db):
+    """The escape hatch, for what the rule misses or gets wrong. Prefer the
+    username rule where it works: a chat_id changes when a bot is recreated,
+    a username does not."""
+    ad = TelegramAdapter(telegram_db, exclude_chat_ids=(111,))
+    threads = {e.thread_key for e in ad.fetch()}
+    assert "telegram:111" not in threads
+    assert "telegram:222" in threads
+
+
+def test_telegram_exclude_chat_ids_are_coerced_to_int(telegram_db):
+    """These are inlined into the SQL rather than bound, because a
+    variable-length IN list cannot be written once across pyformat and qmark.
+    int() is the entire reason that is safe."""
+    ad = TelegramAdapter(telegram_db, exclude_chat_ids=("111",))
+    assert ad.exclude_chat_ids == (111,)
+    with pytest.raises(ValueError):
+        TelegramAdapter(telegram_db, exclude_chat_ids=("111 OR 1=1",))
