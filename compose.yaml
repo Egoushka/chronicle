@@ -24,6 +24,22 @@ services:
       # avg 74.79 vs mE5-large 74.04, MIRACL-ru 70.16 vs 67.33.
       EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-m3}
       EMBED_DIM: "1024"
+      # torch defaults to one thread per core. On 16 cores that OVERSUBSCRIBES
+      # a box already running ~107 other services, and the threads spend more
+      # time contending than computing. Measured, one short query through
+      # BGE-M3, mean of 5 after warmup:
+      #
+      #     threads   fp16      fp32
+      #     16        0.541s    4.385s     <- the default, i.e. no setting
+      #      8        0.215s    0.198s
+      #      4        0.238s    0.250s
+      #
+      # 8 is the floor of that curve. Note fp32 at 16 threads is 8x WORSE than
+      # fp16 at 16 — use_fp16=True is doing real work here despite there being
+      # no GPU, because this model is memory-bandwidth bound on CPU, not
+      # FLOP-bound. Do not "fix" it by turning fp16 off.
+      OMP_NUM_THREADS: "8"
+      MKL_NUM_THREADS: "8"
       # Query-time reasoning still goes through LiteLLM — that traffic is
       # summaries and snippets, not the raw archive, and it is a few hundred
       # calls a month.
@@ -130,6 +146,11 @@ services:
       # Local model for enrichment. Runs only while this container runs.
       ENRICH_MODEL: ${ENRICH_MODEL:-qwen3:8b-q4_K_M}
       OLLAMA_URL: ${OLLAMA_URL:-http://litellm:4000/v1}
+      # Same reasoning as chronicle-api above. The worker encodes in batches
+      # rather than one query at a time, so it is less sensitive than the API,
+      # but it runs on the same contended 16 cores.
+      OMP_NUM_THREADS: "8"
+      MKL_NUM_THREADS: "8"
 
     volumes:
       - chronicle_models:/models

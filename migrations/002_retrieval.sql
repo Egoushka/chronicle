@@ -9,8 +9,27 @@
 -- Hybrid retrieval with Reciprocal Rank Fusion.
 -- RRF over weighted score fusion: no normalization needed, robust to the two
 -- retrievers' incomparable scales. k=60 is standard.
--- Filters applied INSIDE the CTE as exact SQL predicates — free and exact,
--- because there is no ANN index to fragment.
+--
+-- The four filter predicates are REPEATED in both branches instead of being
+-- factored into a shared `filtered` CTE. That duplication is deliberate and it
+-- is the whole performance story of this function.
+--
+-- A CTE referenced twice is materialized by PostgreSQL, and a CTE scan cannot
+-- use an index. Factoring the filters out therefore cost the lexical branch
+-- `episode_fts_idx` (001_core.sql:173, 25 MB GIN, expression-identical to the
+-- predicate below) and made it recompute to_tsvector() for every substantive
+-- episode on every query. Measured on the live archive, 38,736 substantive
+-- episodes:
+--
+--     lexical branch, via the materialized CTE     5,506 ms
+--     lexical branch, against the base table           3.2 ms
+--     whole function, CTE version                  5,694 ms
+--     whole function, this version                   120-255 ms
+--
+-- Top-20 output is byte-identical between the two; this buys ~45x for nothing.
+-- The dense branch is a brute-force scan either way (there is deliberately no
+-- ANN index — see ADR-001) and costs ~180 ms, so it is the lexical half that
+-- has to reach its index.
 CREATE OR REPLACE FUNCTION hybrid_search(
     q_embedding  halfvec(1024),
     q_text       TEXT,
@@ -24,32 +43,35 @@ CREATE OR REPLACE FUNCTION hybrid_search(
 )
 RETURNS TABLE (episode_id BIGINT, rrf_score DOUBLE PRECISION,
                dense_rank INT, lex_rank INT) AS $$
-WITH filtered AS (
-    SELECT e.episode_id, e.embedding, e.lemmatized_text, e.embed_text
+WITH dense AS (
+    SELECT e.episode_id,
+           row_number() OVER (ORDER BY e.embedding <=> q_embedding)::int AS rnk
     FROM episode e
-    WHERE (date_from     IS NULL OR e.started_at >= date_from)
+    WHERE e.is_substantive
+      AND e.embedding IS NOT NULL
+      AND (date_from     IS NULL OR e.started_at >= date_from)
       AND (date_to       IS NULL OR e.started_at <= date_to)
       AND (thread_filter IS NULL OR e.thread_key = ANY(thread_filter))
       AND (source_filter IS NULL OR e.sources && source_filter)
-      AND e.is_substantive
-),
-dense AS (
-    SELECT f.episode_id,
-           row_number() OVER (ORDER BY f.embedding <=> q_embedding)::int AS rnk
-    FROM filtered f
-    WHERE f.embedding IS NOT NULL
-    ORDER BY f.embedding <=> q_embedding
+    ORDER BY e.embedding <=> q_embedding
     LIMIT n_candidates
 ),
 lexical AS (
-    SELECT f.episode_id,
+    SELECT e.episode_id,
            row_number() OVER (
                ORDER BY ts_rank_cd(
-                   to_tsvector('ru_unaccent', coalesce(f.lemmatized_text, f.embed_text)),
+                   to_tsvector('ru_unaccent', coalesce(e.lemmatized_text, e.embed_text)),
                    plainto_tsquery('ru_unaccent', q_text)) DESC)::int AS rnk
-    FROM filtered f
-    WHERE to_tsvector('ru_unaccent', coalesce(f.lemmatized_text, f.embed_text))
+    FROM episode e
+    WHERE e.is_substantive
+      -- Keep this expression character-identical to episode_fts_idx or the
+      -- planner silently falls back to a sequential scan and the 45x is gone.
+      AND to_tsvector('ru_unaccent', coalesce(e.lemmatized_text, e.embed_text))
           @@ plainto_tsquery('ru_unaccent', q_text)
+      AND (date_from     IS NULL OR e.started_at >= date_from)
+      AND (date_to       IS NULL OR e.started_at <= date_to)
+      AND (thread_filter IS NULL OR e.thread_key = ANY(thread_filter))
+      AND (source_filter IS NULL OR e.sources && source_filter)
     LIMIT n_candidates
 )
 SELECT coalesce(d.episode_id, l.episode_id),
