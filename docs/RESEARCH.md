@@ -4,6 +4,20 @@
 **Corpus:** measured live from your `telegram-sync` MCP, not assumed
 **Constraints:** hybrid privacy boundary · self-hosted Hetzner · zero marginal API budget for backfill
 
+> **Terminology note (2026-09-14).** Chronicle's aggregate unit — a time-gap
+> cluster of ~13 events — is called a **segment**, after SeCom's "segment-level"
+> in §2 below. It was called an `episode` until the rename in `migrations/003`;
+> the word moved because JARVIS uses "episode" for a *single* Telegram message,
+> and two live repos using one word at opposite granularities is a bug waiting
+> to happen.
+>
+> **"Episode" still appears in this document on purpose.** It is Graphiti's
+> name for its immutable layer (§4, §7, §9), it is in the title of Pink et al.
+> and in SSGM's RQ2 (§2.11), and once it is just the English word. Those are
+> quotations of other people's work — do not bulk-rename them. The rule: if the
+> sentence describes *chronicle*, it says segment; if it describes someone
+> else's system or paper, it says whatever they said.
+
 ---
 
 ## 1. Executive summary
@@ -473,7 +487,7 @@ Raw Messages → Conversation → Daily → Weekly → Monthly → Life Events
 
 And the empirical result is unambiguous: **summarization is the worst-performing retrieval granularity in the literature** — 53.87–56.25 vs 71.57 for segments (SeCom), 31.5 vs 38.0 for observations (LoCoMo).
 
-**(b) Daily / weekly / monthly are the wrong axis.** They are calendar buckets, not semantic ones. A three-week obsession doesn't align to a week boundary. A conversation that changed your mind doesn't align to a day. You'd be summarizing across topic boundaries and within them arbitrarily. **Episodes and topic-threads are the natural units; calendar rollups are a *view*, computable on demand from the episodic layer, not a stored layer.**
+**(b) Daily / weekly / monthly are the wrong axis.** They are calendar buckets, not semantic ones. A three-week obsession doesn't align to a week boundary. A conversation that changed your mind doesn't align to a day. You'd be summarizing across topic boundaries and within them arbitrarily. **Segments and topic-threads are the natural units; calendar rollups are a *view*, computable on demand from the segment layer, not a stored layer.**
 
 **(c) Identity / Values / Personality are not memory.** They are *inferences* about you. Storing them as a distilled layer means: they go stale silently, they cannot be audited, they cannot cite evidence, and — worst — they become self-reinforcing. A stored belief that "Yehor is risk-averse" will bias every future retrieval that touches it. **These should be computed on demand from evidence, versioned, and always accompanied by their citations.**
 
@@ -481,7 +495,7 @@ And the empirical result is unambiguous: **summarization is the worst-performing
 
 ```
                        ┌─────────────────────────┐
-                       │  IMMUTABLE EPISODIC LOG │   ← append-only, never rewritten
+                       │  IMMUTABLE SEGMENT LOG  │   ← append-only, never rewritten
                        │  messages + sessions    │      the only source of truth
                        └───────────┬─────────────┘
                                    │  (every projection references specific
@@ -1166,7 +1180,7 @@ At your growth rate (~90k messages/year), you reach **1.5M messages around 2035*
 | **Re-enrichment passes** | Each full reprocess is weeks of CPU and you will do many | Version everything; reprocess incrementally by date range; keep the work queue resumable. |
 | **Community detection** (if you ever add graph) | Global recompute, no incremental story | Another reason to use time as the partition key instead. |
 | **Contradiction accumulation** | Hundreds of superseded facts per entity over a decade | Bi-temporal intervals plus `max()` resolution. Do not let an LLM adjudicate. |
-| **Semantic drift from re-summarization** | Compounds silently over a decade | The immutable episodic log is the answer. Never summarize a summary. |
+| **Semantic drift from re-summarization** | Compounds silently over a decade | The immutable segment log is the answer. Never summarize a summary. |
 | **Deletion** | O(N·d) index rebuild plus backflow from derived artifacts | Reference counting from day one. Retrofitting is very expensive. |
 | **Media storage** | Photos and voice notes are the actual byte problem, not vectors | Store media outside the DB; keep hashes and derived text in it. |
 
@@ -1224,7 +1238,7 @@ At your growth rate (~90k messages/year), you reach **1.5M messages around 2035*
 |---|---|---|---|
 | 1 | **Segmentation is wrong and everything downstream inherits the damage.** SOTA dialogue segmentation reaches only Pk 38.11 on realistic data — misclassifying boundary/non-boundary 38% of the time. | **Critical** | Use time gaps (deterministic, free, reliable) not learned segmentation. Version the segmenter. Make rebuilds cheap. Manually inspect 100 random sessions before trusting the pipeline. |
 | 2 | **Local LLM extraction quality on code-switched RU/UK slang is unmeasured and probably poor.** | **High** | Hand-label 200 sessions. Measure precision/recall of extraction before running the 60k-session pass. Store `extractor_version` and `confidence` so you can filter and re-run. |
-| 3 | **Semantic drift.** Any re-summarization pass compounds error over years. | High | Immutable episodic log. Never summarize a summary. All projections cite source message IDs. |
+| 3 | **Semantic drift.** Any re-summarization pass compounds error over years. | High | Immutable segment log. Never summarize a summary. All projections cite source message IDs. |
 | 4 | **Silent recall loss.** You never learn what the system failed to find. | High | Exact search, not ANN. Log every query's candidate counts. Periodically spot-check against brute-force ground truth. |
 | 5 | **Contradiction accumulation over 7.6 years.** LLM adjudication degrades 14 points from 64K to 262K context. | High | `max()` in code, never in a prompt. Bi-temporal intervals. |
 | 6 | **O(N²) entity resolution** kills the pipeline between 10⁴ and 10⁵ items. | High | Block by `sender_id`, chat, and time window. Never compare globally. |

@@ -26,7 +26,7 @@ not retrieval units — they crowd every neighbourhood they land in and bury the
 1.5% of messages that carry a proposition.
 
 **Chronicle's core move is aggregation before indexing.** Events are grouped
-into *episodes* by a per-thread fitted time gap: 681k units become ~50k. The
+into *segments* by a per-thread fitted time gap: 681k units become ~50k. The
 index gets ~11× smaller and retrieval gets better at the same time.
 
 Evidence, from SeCom (ICLR 2025), measuring retrieval quality by memory unit
@@ -69,9 +69,9 @@ immich has 400 near-identical burst frames per moment, and the archive becomes
 millions of events that are ~90% chaff. Precision collapses the same way.
 
 So every source declares a **density**, and density decides how hard the
-adapter aggregates *before* anything reaches the episode layer:
+adapter aggregates *before* anything reaches the segment layer:
 
-- `NARRATIVE` — deliberate human text. Segmented into episodes.
+- `NARRATIVE` — deliberate human text. Segmented into segments.
 - `DISCRETE` — one row really is one thing that happened. Passed through.
 - `TELEMETRY` — meaningful only in aggregate. **The adapter rolls it up**:
   wakapi heartbeats → coding sessions, dawarich points → stays, lastfm
@@ -108,14 +108,14 @@ They are opposites, which is why they compose.
 | | Hindsight | Chronicle |
 |---|---|---|
 | origin | you decided it mattered | you never chose to save any of it |
-| volume | ~5,200 facts | 681k events / ~50k episodes |
+| volume | ~5,200 facts | 681k events / ~50k segments |
 | precision | high, curated | low, exhaustive |
 | evidence trail | none | nothing *but* evidence |
 | shape | a notebook you write in | a recording that ran the whole time |
 
 **Chronicle does not replace Hindsight and must not flood it.** The `personal`
 bank is already at 2,726 facts and times out on `sync_retain`; piping ~50k
-episodes of extracted facts into it would 40× the bank and make `recall`
+segments of extracted facts into it would 40× the bank and make `recall`
 useless.
 
 Two narrow flows instead:
@@ -125,7 +125,7 @@ Two narrow flows instead:
   including ones that contradict. This replaces time-based staleness rules
   (ticket >14d, finance >30d) with a measurement.
 - **Promotion (Chronicle → Hindsight), rare.** `v_promotable_facts` requires
-  support across ≥3 episodes **and** ≥2 threads at confidence ≥0.7. Target
+  support across ≥3 segments **and** ≥2 threads at confidence ≥0.7. Target
   hundreds per year. Watch `get_bank_stats` after each run.
 
 ## Architecture
@@ -138,7 +138,7 @@ sources ──► adapters ──► event (immutable, partitioned by year)
                      681k ──► ~50k           + caps + reply-edge anchors
                             │
                             ▼
-                     episode                 raw_text (returned)
+                     segment                 raw_text (returned)
                             │                embed_text (indexed)
                             ▼
                      PostgreSQL              halfvec(1024) exact scan
@@ -148,7 +148,7 @@ sources ──► adapters ──► event (immutable, partitioned by year)
                      MCP ──► agent-runner ──► tg-assistant
 ```
 
-Everything is in one PostgreSQL. At ~50k episodes for one user, ANN solves a
+Everything is in one PostgreSQL. At ~50k segments for one user, ANN solves a
 problem that doesn't exist: exact cosine over ~123 MB is single-digit ms, and
 it keeps every date filter exact — sidestepping the HNSW percolation failure
 that bites hardest at the ~1%-cardinality date ranges you query most.
@@ -163,7 +163,7 @@ make smoke                    # migrations + every SQL function, throwaway DB
 
 make doctor                   # ← ALWAYS. validates sources before you ingest
 make doctor-homelab TIER=2    # ← the real one: sources live ON the box
-make ingest                   # sources -> event -> episode -> embedding
+make ingest                   # sources -> event -> segment -> embedding
 make eval-init && make eval   # chronicle vs ripgrep, on your questions
 ```
 

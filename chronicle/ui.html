@@ -1,0 +1,207 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>chronicle</title>
+<!--
+  Served by chronicle-api itself at GET / — deliberately, not as a separate
+  static host or a page opened from file://. Same origin means no CORS
+  middleware, no preflight, and no reason to widen what the API accepts:
+  8030 binds 127.0.0.1 on the box, so the only way here is an SSH tunnel.
+  A page loaded from file:// has origin `null` and every POST would need
+  Access-Control-Allow-Origin on an API holding the whole archive.
+
+  No CDN, no build step, no framework. The box has no RAM headroom and this
+  is ~300 lines; a dependency here would be pure cost.
+-->
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1a1a18; --dim: #6b6b64; --line: #e3e0da;
+    --card: #ffffff; --accent: #7a5c3e; --hl: #f2ede4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17171a; --fg: #e8e6e1; --dim: #97948c; --line: #2c2c31;
+      --card: #1e1e22; --accent: #c79f72; --hl: #2a251d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    position: sticky; top: 0; background: var(--bg);
+    border-bottom: 1px solid var(--line); padding: 14px 20px 12px; z-index: 5;
+  }
+  h1 { margin: 0 0 10px; font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+  h1 small { color: var(--dim); font-weight: 400; margin-left: 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input, select, button {
+    font: inherit; color: var(--fg); background: var(--card);
+    border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px;
+  }
+  #q { flex: 1 1 320px; min-width: 200px; }
+  input[type=date] { color-scheme: light dark; }
+  button {
+    background: var(--accent); color: #fff; border-color: transparent;
+    cursor: pointer; font-weight: 500;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  button.mode {
+    background: transparent; color: var(--dim); border-color: var(--line);
+    font-weight: 400;
+  }
+  button.mode[aria-pressed=true] {
+    background: var(--hl); color: var(--fg); border-color: var(--accent);
+  }
+  main { padding: 18px 20px 60px; max-width: 900px; }
+  .meta { color: var(--dim); font-size: 13px; margin-bottom: 14px; }
+  article {
+    background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; margin-bottom: 12px;
+  }
+  .hd {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline;
+    font-size: 12.5px; color: var(--dim); margin-bottom: 8px;
+  }
+  .hd b { color: var(--fg); font-weight: 600; }
+  .txt { white-space: pre-wrap; overflow-wrap: anywhere; }
+  details { margin-top: 8px; font-size: 12.5px; color: var(--dim); }
+  details pre {
+    white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 0;
+    font-size: 11.5px; line-height: 1.5;
+  }
+  .err { color: #c0392b; }
+  @media (prefers-color-scheme: dark) { .err { color: #ff8a75; } }
+</style>
+
+<header>
+  <h1>chronicle <small id="stats">…</small></h1>
+  <div class="row" style="margin-bottom:8px">
+    <button class="mode" data-mode="recall">recall</button>
+    <button class="mode" data-mode="first-mention">first mention</button>
+    <button class="mode" data-mode="evolution">evolution</button>
+    <button class="mode" data-mode="timeline">timeline</button>
+  </div>
+  <form class="row" id="f">
+    <input id="q" placeholder="что решили насчёт квартиры" autofocus>
+    <input type="date" id="from" title="from">
+    <input type="date" id="to" title="to">
+    <select id="src"><option value="">all sources</option></select>
+    <select id="lim"><option>10</option><option selected>20</option><option>50</option></select>
+    <button id="go">search</button>
+  </form>
+</header>
+
+<main>
+  <div class="meta" id="meta"></div>
+  <div id="out"></div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let mode = "recall";
+
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const day = s => (s || "").slice(0, 10);
+
+function setMode(m) {
+  mode = m;
+  document.querySelectorAll(".mode").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
+  // timeline has no query term; the others do.
+  $("#q").disabled = m === "timeline";
+  $("#q").placeholder = {
+    "recall": "что решили насчёт квартиры",
+    "first-mention": "kubernetes",
+    "evolution": "инвестиции",
+    "timeline": "(dates only)",
+  }[m];
+}
+document.querySelectorAll(".mode").forEach(b =>
+  b.onclick = e => { e.preventDefault(); setMode(b.dataset.mode); });
+
+// Each endpoint takes a different body — that is the point of having more
+// than one (see api.py: "when did I first mention X" and "how did my view
+// evolve" are different systems).
+function body() {
+  const q = $("#q").value.trim(), from = $("#from").value, to = $("#to").value;
+  if (mode === "recall") return {
+    query: q, limit: +$("#lim").value,
+    date_from: from || null, date_to: to || null,
+    source: $("#src").value || null,
+  };
+  if (mode === "first-mention") return { term: q };
+  if (mode === "evolution")     return { topic: q };
+  return { date_from: from || "2018-12-01", date_to: to || new Date().toISOString().slice(0,10) };
+}
+
+// One renderer per response shape. Nothing here invents a field the API does
+// not return: an unattributed answer about your own life is worse than none.
+function render(d) {
+  const rows = d.results || d.candidates || d.bins || d.events || d.entries || [];
+  if (!rows.length) return `<div class="meta">no results</div>`;
+  return rows.map(r => {
+    const when = r.date || r.started_at || r.bin || r.period || "";
+    const head = [
+      when ? `<b>${esc(day(when))}</b>` : "",
+      r.thread ? esc(r.thread) : (r.source ? esc(r.source) : ""),
+      r.score != null ? `score ${(+r.score).toFixed(4)}` : "",
+      r.event_count != null ? `${r.event_count} events` : "",
+      r.n != null ? `n=${esc(r.n)}` : "",
+    ].filter(Boolean).join(" · ");
+    const text = r.text || r.summary || r.raw_text || JSON.stringify(r, null, 1);
+    const ev = r.evidence || r.source_event_ids;
+    return `<article>
+      <div class="hd">${head}</div>
+      <div class="txt">${esc(text)}</div>
+      ${ev && ev.length ? `<details><summary>${ev.length} evidence id${ev.length>1?"s":""}</summary><pre>${esc(ev.join("\n"))}</pre></details>` : ""}
+    </article>`;
+  }).join("");
+}
+
+$("#f").onsubmit = async e => {
+  e.preventDefault();
+  if (mode !== "timeline" && !$("#q").value.trim()) return;
+  $("#go").disabled = true;
+  $("#meta").textContent = "…";
+  $("#out").innerHTML = "";
+  const t0 = performance.now();
+  try {
+    const res = await fetch("/" + mode, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body()),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.detail || res.status);
+    const ms = Math.round(performance.now() - t0);
+    const n = (d.results || d.candidates || d.bins || d.events || d.entries || []).length;
+    $("#meta").innerHTML = `${n} result${n===1?"":"s"} · ${ms} ms`
+      + (d.intent ? ` · intent <b>${esc(d.intent)}</b>` : "")
+      + (d.routed_because ? ` (${esc(d.routed_because)})` : "");
+    $("#out").innerHTML = render(d);
+  } catch (err) {
+    // The first request after a restart pays 11-16s of lazy BGE-M3 load
+    // (hard-won fact 25) — worth saying so rather than looking broken.
+    $("#meta").innerHTML = `<span class="err">${esc(err.message)}</span>`
+      + ` — if this is the first query after a restart, the model is still loading; retry.`;
+  } finally {
+    $("#go").disabled = false;
+  }
+};
+
+fetch("/stats").then(r => r.json()).then(d => {
+  const s = d.segments || {};
+  const ev = (d.sources || []).reduce((a, x) => a + (x.events || 0), 0);
+  $("#stats").textContent =
+    `${ev.toLocaleString()} events · ${(s.total||0).toLocaleString()} segments · ${(s.embedded||0).toLocaleString()} embedded`;
+  (d.sources || []).forEach(x => {
+    const o = document.createElement("option");
+    o.value = o.textContent = x.source;
+    $("#src").append(o);
+  });
+}).catch(() => { $("#stats").textContent = "stats unavailable"; });
+
+setMode("recall");
+</script>

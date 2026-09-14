@@ -5,7 +5,11 @@ set -euo pipefail
 DB="${1:-chronicle_smoke}"
 psql -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $DB" postgres
 psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE $DB" postgres
-psql -v ON_ERROR_STOP=1 -q -d "$DB" -f migrations/001_core.sql
-psql -v ON_ERROR_STOP=1 -q -d "$DB" -f migrations/002_retrieval.sql
+# Globbed so a new migration is exercised by CI the day it lands. Enumerating
+# 001 and 002 meant 003 would have been invisible here — and CI runs only this
+# script, so an unapplied migration would have looked green.
+for m in migrations/*.sql; do
+    psql -v ON_ERROR_STOP=1 -q -d "$DB" -f "$m"
+done
 psql -v ON_ERROR_STOP=1 -q -d "$DB" -f scripts/smoke.sql
 echo "smoke OK"

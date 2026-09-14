@@ -106,23 +106,23 @@ docker compose --profile batch run --rm chronicle-worker \
   python -m chronicle.worker segment
 
 # ---------------------------------------------------------------------------
-# 5. STOP. Read episodes before embedding them.
+# 5. STOP. Read segments before embedding them.
 #
 # Segmentation is the highest-value stage and everything downstream inherits
 # it. Checking it now costs ten minutes; finding it wrong after a multi-hour
 # embed costs the embed.
 # ---------------------------------------------------------------------------
-say "100 random episodes — READ THESE before continuing"
+say "100 random segments — READ THESE before continuing"
 docker compose exec -T chronicle-db psql -U chronicle -d chronicle -c \
   "SELECT thread_key, started_at::date, event_count,
           left(raw_text, 160) AS text
-   FROM episode ORDER BY random() LIMIT 100"
+   FROM segment ORDER BY random() LIMIT 100"
 
 cat <<'EOF'
 
   Stop here and read the sample above.
 
-  Looking for: episodes that run together conversations that have nothing to
+  Looking for: segments that run together conversations that have nothing to
   do with each other, or that cut mid-exchange. If either is common, the gap
   fit is wrong — fix segmentation before embedding. Everything downstream
   inherits this.

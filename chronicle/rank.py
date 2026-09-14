@@ -31,7 +31,7 @@ def reciprocal_rank_fusion(
 class Candidate:
     session_id: int
     rrf: float
-    entity_mentions: int = 0      # cheap, non-LLM (Graphiti's episode-mentions)
+    entity_mentions: int = 0      # cheap, non-LLM (Graphiti's segment-mentions)
     node_distance: float = 1.0    # graph proximity to a named person
     importance: float = 0.0
     participant_match: bool = False

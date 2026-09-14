@@ -15,9 +15,11 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .embed import Embedder, Lemmatizer
@@ -52,6 +54,18 @@ def q(sql: str, params: tuple = ()) -> list[tuple]:
         return cur.fetchall()
 
 
+# The browser surface. Served from this app rather than a static host so it
+# shares the API's origin: no CORS middleware, no preflight, and nothing to
+# widen on an API that holds the entire archive. 8030 binds 127.0.0.1 on the
+# box, so reaching this at all means an SSH tunnel.
+_UI = (Path(__file__).parent / "ui.html").read_text(encoding="utf-8")
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def ui():
+    return _UI
+
+
 @app.get("/health")
 def health():
     try:
@@ -67,13 +81,13 @@ def stats():
                        s.last_error, count(e.*) AS events
                 FROM source s LEFT JOIN event e ON e.source = s.source
                 GROUP BY s.source, s.density, s.enabled, s.last_ingested_at, s.last_error""")
-    eps = q("""SELECT count(*), count(*) FILTER (WHERE embedding IS NOT NULL),
-                      count(*) FILTER (WHERE enriched_at IS NOT NULL) FROM episode""")[0]
+    segs = q("""SELECT count(*), count(*) FILTER (WHERE embedding IS NOT NULL),
+                      count(*) FILTER (WHERE enriched_at IS NOT NULL) FROM segment""")[0]
     return {
         "sources": [dict(zip(
             ("source", "density", "enabled", "last_ingested_at", "last_error", "events"), r))
             for r in rows],
-        "episodes": {"total": eps[0], "embedded": eps[1], "enriched": eps[2]},
+        "segments": {"total": segs[0], "embedded": segs[1], "enriched": segs[2]},
     }
 
 
@@ -89,17 +103,17 @@ class RecallReq(BaseModel):
 def recall(req: RecallReq):
     intent = route(req.query)
     vec = _state["embedder"].encode_one(req.query).tolist()
-    rows = q("""SELECT h.episode_id, h.rrf_score, e.started_at, e.thread_key,
+    rows = q("""SELECT h.segment_id, h.rrf_score, e.started_at, e.thread_key,
                        e.raw_text, e.source_event_ids, e.summary
                 FROM hybrid_search(%s::halfvec, %s, %s, %s, NULL, %s, 100, %s) h
-                JOIN episode e USING (episode_id)
+                JOIN segment e USING (segment_id)
                 ORDER BY h.rrf_score DESC""",
              (vec, req.query, req.date_from, req.date_to,
               [req.source] if req.source else None, req.limit))
     return {
         "intent": intent.kind,
         "routed_because": intent.matched_pattern,
-        "results": [{"episode_id": r[0], "score": float(r[1]),
+        "results": [{"segment_id": r[0], "score": float(r[1]),
                      "date": r[2].isoformat(), "thread": r[3],
                      "text": r[4][:2000], "evidence": r[5], "summary": r[6]}
                     for r in rows],
@@ -116,7 +130,7 @@ def first_mention(req: FirstMentionReq):
 
     Top-k returns the k most SIMILAR events, which are almost never the
     EARLIEST — similarity and recency are uncorrelated, so no value of k makes
-    'earliest' reachable. Runs against `event`, not `episode`: a first mention
+    'earliest' reachable. Runs against `event`, not `segment`: a first mention
     is typically a bare token in a 15-character message.
     """
     lemma = _state["lemmatizer"](req.term)
@@ -147,16 +161,16 @@ def evolution(req: EvolutionReq):
     Time measured sorted presentation at 71.95% vs shuffled 58.82%.
     """
     vec = _state["embedder"].encode_one(req.topic).tolist()
-    rows = q("""SELECT s.bin_start, e.episode_id, e.started_at, e.raw_text,
+    rows = q("""SELECT s.bin_start, e.segment_id, e.started_at, e.raw_text,
                        e.source_event_ids
                 FROM stratified_search(%s::halfvec, %s::interval, 10) s
-                JOIN episode e USING (episode_id)
+                JOIN segment e USING (segment_id)
                 ORDER BY s.bin_start, s.rank_in_bin""",
              (vec, req.bin_width))
     bins: dict[str, list] = {}
     for bin_start, eid, started, text, ev in rows:
         bins.setdefault(bin_start.isoformat()[:10], []).append(
-            {"episode_id": eid, "date": started.isoformat(),
+            {"segment_id": eid, "date": started.isoformat(),
              "text": text[:800], "evidence": ev})
     return {"topic": req.topic, "bins": bins, "bin_count": len(bins)}
 
@@ -206,7 +220,7 @@ def timeline(req: TimelineReq):
     rows = q("""SELECT e.started_at, e.sources, e.thread_key,
                        coalesce(e.summary, left(e.raw_text, 300)),
                        e.source_event_ids
-                FROM episode e
+                FROM segment e
                 WHERE e.started_at BETWEEN %s AND %s
                   AND (%s::text[] IS NULL OR e.sources && %s::text[])
                   AND e.is_substantive
@@ -247,16 +261,16 @@ def ground(req: GroundReq):
     evidence says it changed, not when a timer expires.
     """
     vec = _state["embedder"].encode_one(req.claim).tolist()
-    rows = q("""SELECT h.episode_id, h.rrf_score, e.started_at, e.raw_text,
+    rows = q("""SELECT h.segment_id, h.rrf_score, e.started_at, e.raw_text,
                        e.source_event_ids
                 FROM hybrid_search(%s::halfvec, %s, NULL, NULL, NULL, NULL, 100, %s) h
-                JOIN episode e USING (episode_id)
+                JOIN segment e USING (segment_id)
                 -- chronological, not by score: a change of position over time
                 -- is the signal, and score-ordering would hide it
                 ORDER BY e.started_at""",
              (vec, req.claim, req.limit))
     return {"claim": req.claim,
-            "evidence": [{"episode_id": r[0], "date": r[2].isoformat(),
+            "evidence": [{"segment_id": r[0], "date": r[2].isoformat(),
                           "text": r[3][:1500], "source_event_ids": r[4]}
                          for r in rows],
             "note": "presented chronologically so a change of position is visible; "

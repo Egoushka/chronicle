@@ -1,7 +1,7 @@
 """Telegram adapter — reads telegram-sync's SQLite/Postgres, never writes.
 
 telegram-sync stays a pure ingest+sync service. Chronicle owns aggregation
-and indexing. Once Chronicle's episode index is live, telegram-sync's own
+and indexing. Once Chronicle's segment index is live, telegram-sync's own
 `telegram_personal` Qdrant collection and its embedding path become
 redundant and should be deleted — the brain must REMOVE something, not just
 add a stack.
@@ -56,25 +56,79 @@ class TelegramAdapter(SqlAdapter):
     density = Density.NARRATIVE
     itersize = BATCH
 
-    def __init__(self, dsn: str, personal_only: bool = True):
+    def __init__(self, dsn: str, personal_only: bool = True,
+                 exclude_chat_ids: tuple[int, ...] = (),
+                 exclude_bot_chats: bool = True):
         super().__init__(dsn)
         self.personal_only = personal_only
+        # Coerced to int on the way in. These are inlined into the SQL below
+        # rather than bound, because a variable-length IN list cannot be
+        # expressed once across pyformat and qmark; int() is what makes that
+        # safe, so do not relax it to accept strings.
+        self.exclude_chat_ids = tuple(int(c) for c in exclude_chat_ids)
+        self.exclude_bot_chats = exclude_bot_chats
 
     def fetch(self, since: datetime | None = None,
               until: datetime | None = None) -> Iterator[SourceEvent]:
-        sql = """
-            SELECT chat_id, msg_id, chat_title, chat_type, sender_name,
-                   date, text, media_type, reply_to_id, direction
-            FROM v_messages
-            WHERE (%(since)s IS NULL OR date > %(since)s)
-              AND (%(until)s IS NULL OR date <= %(until)s)
+        # A bot DM IS a `chat_type = 'user'` chat, so `personal_only` does not
+        # keep bots out — measured, chat_type is 'user' for 100% of 690,177
+        # rows, which makes that filter a no-op in both directions.
+        #
+        # This matters beyond tidiness. sources.py NOT_SOURCES already excludes
+        # tg-assistant, agent-runner and hindsight at the STACK level; without
+        # the same rule at the ROW level, an assistant's own Telegram chat flows
+        # telegram-sync -> chronicle -> back to the assistant through chronicle's
+        # MCP, and it reads its own output as external memory about Yehor.
+        #
+        # Bot chats are 0.81% of rows but 11.3% of messages over 200 chars
+        # (they average 151.6 chars against 27.8 for everything else), so in the
+        # unit this index actually exists to serve they are ~14x more present
+        # than the row count suggests.
+        exclude_ids = ""
+        if self.exclude_chat_ids:
+            ids = ",".join(str(c) for c in self.exclude_chat_ids)
+            exclude_ids = f"AND v.chat_id NOT IN ({ids})"
+
+        sql = f"""
+            SELECT v.chat_id, v.msg_id, v.chat_title, v.chat_type, v.sender_name,
+                   v.date, v.text, v.media_type, v.reply_to_id, v.direction
+            FROM v_messages v
+            -- LEFT, never INNER: 33 chat_ids in `messages` have no `chats` row
+            -- at all and carry 1,165 messages between them. An inner join drops
+            -- those silently, which is a data-loss bug wearing a filter's
+            -- clothes. v_chat_stats inside telegram.db joins the other way
+            -- round — do not copy it as the house pattern.
+            LEFT JOIN chats c ON c.chat_id = v.chat_id
+            WHERE (%(since)s IS NULL OR v.date > %(since)s)
+              AND (%(until)s IS NULL OR v.date <= %(until)s)
               -- `IS FALSE` is SQLite >= 3.23 only and psycopg would send a
               -- real boolean; an int compare works on every dialect.
-              AND (%(personal)s = 0 OR chat_type = 'user')
-            ORDER BY date, chat_id, msg_id
+              AND (%(personal)s = 0 OR v.chat_type = 'user')
+              {exclude_ids}
+              AND (%(nobots)s = 0 OR (
+                    -- Telegram REQUIRES every bot username to end in "bot", so
+                    -- this is a platform invariant rather than a guess. The
+                    -- residual risk is a human named e.g. @talbot; that is what
+                    -- TELEGRAM_EXCLUDE_CHAT_IDS is for, in either direction.
+                    coalesce(lower(c.username), '') NOT LIKE %(botpat)s
+                    -- telegram-sync already auto-classifies bot chats, and the
+                    -- tag catches the ones with no bot-shaped username at all
+                    -- (BotFather, Crypto Bot). Neither signal is a superset of
+                    -- the other: 29 chats are tagged, 92 match the username
+                    -- rule, and the overlap is partial. Union, not either.
+                    AND NOT EXISTS (SELECT 1 FROM chat_tags t
+                                    WHERE t.chat_id = v.chat_id
+                                      AND t.tag = %(bottag)s)))
+            ORDER BY v.date, v.chat_id, v.msg_id
         """
         params = {"since": _bound(since), "until": _bound(until),
-                  "personal": int(self.personal_only)}
+                  "personal": int(self.personal_only),
+                  "nobots": int(self.exclude_bot_chats),
+                  "botpat": "%bot", "bottag": "chat:bot"}
+        if self.exclude_bot_chats or self.exclude_chat_ids:
+            log.info("telegram: excluding bot chats=%s, explicit chat_ids=%s",
+                     self.exclude_bot_chats,
+                     list(self.exclude_chat_ids) or "none")
         for row in self._stream(sql, params):
                 (chat_id, msg_id, chat_title, chat_type, sender_name,
                  date, text, media_type, reply_to_id, direction) = row

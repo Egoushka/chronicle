@@ -26,8 +26,8 @@ SELECT 'events inserted: ' || count(*) FROM event;
 SELECT 'threads fitted: ' || fit_thread_gaps(100);
 SELECT thread_key, gap_seconds, gap_fit_stats->>'p90' AS p90 FROM thread_config;
 
--- episodes (segmentation normally happens in Python; insert a plausible set)
-INSERT INTO episode(thread_key, sources, started_at, ended_at, event_count,
+-- segments (segmentation normally happens in Python; insert a plausible set)
+INSERT INTO segment(thread_key, sources, started_at, ended_at, event_count,
                     participant_ids, source_event_ids, raw_text, embed_text,
                     lemmatized_text, topics, is_substantive, embedding, segmenter_version)
 SELECT 'c1', '{telegram}',
@@ -39,16 +39,16 @@ SELECT 'c1', '{telegram}',
        (SELECT array_agg(random())::halfvec(1024) FROM generate_series(1,1024)),
        'seg-2026.07-timegap-v1'
 FROM generate_series(1, 1200) g;
-SELECT 'episodes: ' || count(*) FROM episode;
+SELECT 'segments: ' || count(*) FROM segment;
 
 -- hybrid search
 SELECT 'hybrid_search rows: ' || count(*) FROM hybrid_search(
-    (SELECT embedding FROM episode LIMIT 1), 'квартира ипотека',
+    (SELECT embedding FROM segment LIMIT 1), 'квартира ипотека',
     NULL, NULL, NULL, NULL, 100, 20);
 
 -- date-filtered (the 1%-cardinality case that breaks filtered HNSW)
 SELECT 'hybrid_search 2019-03 window: ' || count(*) FROM hybrid_search(
-    (SELECT embedding FROM episode LIMIT 1), 'квартира',
+    (SELECT embedding FROM segment LIMIT 1), 'квартира',
     '2019-03-01', '2019-03-31', NULL, NULL, 100, 20);
 
 -- first mention (argmin)
@@ -57,7 +57,7 @@ FROM first_mention(ARRAY['kubernetes'], 3) LIMIT 1;
 
 -- stratified
 SELECT 'stratified bins: ' || count(DISTINCT bin_start) || ', rows: ' || count(*)
-FROM stratified_search((SELECT embedding FROM episode LIMIT 1), '3 months', 10);
+FROM stratified_search((SELECT embedding FROM segment LIMIT 1), '3 months', 10);
 
 -- bi-temporal facts
 INSERT INTO fact_predicate(predicate, single_valued) VALUES ('lives_in', TRUE);

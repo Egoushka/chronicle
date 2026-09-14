@@ -1,6 +1,6 @@
 """Session segmentation — the highest-value stage in the pipeline.
 
-681,331 Telegram messages -> ~50,000 episodes.
+681,331 Telegram messages -> ~50,000 segments.
 
 Evidence (SeCom, ICLR 2025 — LoCoMo GPT4Score by memory unit):
     segment-level  71.57   <- what this module targets
@@ -31,7 +31,7 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-#: Bump when segmentation behaviour changes. Episodes record this so you can
+#: Bump when segmentation behaviour changes. Segments record this so you can
 #: A/B a new segmenter and rebuild only what the change affects.
 SEGMENTER_VERSION = "seg-2026.07-timegap-v1"
 
@@ -140,7 +140,7 @@ class Event:
 
 
 @dataclass
-class Episode:
+class Segment:
     chat_id: int
     messages: list[Event] = field(default_factory=list)
     segmenter_version: str = SEGMENTER_VERSION
@@ -194,19 +194,19 @@ def segment_chat(
     max_messages: int = 30,
     max_tokens: int = 250,
     merge_below: int = 3,
-) -> list[Episode]:
-    """Segment one chat's message stream into episodes.
+) -> list[Segment]:
+    """Segment one chat's message stream into segments.
 
     Splits on: time gap, hard message cap, hard token cap.
     Suppresses a split when an explicit reply edge crosses it.
-    Then merges runt episodes into whichever neighbour is closer in time.
+    Then merges runt segments into whichever neighbour is closer in time.
     """
     evs = sorted(messages, key=lambda m: (m.ts, m.message_id))
     if not evs:
         return []
 
-    episodes: list[Episode] = []
-    current = Episode(chat_id=evs[0].chat_id, messages=[evs[0]])
+    segments: list[Segment] = []
+    current = Segment(chat_id=evs[0].chat_id, messages=[evs[0]])
     open_ids = {evs[0].message_id}
 
     for ev in evs[1:]:
@@ -228,48 +228,48 @@ def segment_chat(
         )
 
         if split:
-            episodes.append(current)
-            current = Episode(chat_id=ev.chat_id, messages=[ev])
+            segments.append(current)
+            current = Segment(chat_id=ev.chat_id, messages=[ev])
             open_ids = {ev.message_id}
         else:
             current.messages.append(ev)
             open_ids.add(ev.message_id)
 
-    episodes.append(current)
-    return _merge_runts(episodes, merge_below, max_messages)
+    segments.append(current)
+    return _merge_runts(segments, merge_below, max_messages)
 
 
-def _merge_runts(episodes: list[Episode], merge_below: int, max_messages: int) -> list[Episode]:
-    """Fold sub-threshold episodes into the temporally nearest neighbour.
+def _merge_runts(segments: list[Segment], merge_below: int, max_messages: int) -> list[Segment]:
+    """Fold sub-threshold segments into the temporally nearest neighbour.
 
-    A 1-event episode is per-message indexing reintroduced through the back
+    A 1-event segment is per-message indexing reintroduced through the back
     door — the exact failure this module exists to prevent.
 
-    Single pass, O(n). An earlier version called `episodes.index(s)` inside the
+    Single pass, O(n). An earlier version called `segments.index(s)` inside the
     loop, which is O(n^2) AND matches by dataclass equality rather than
-    identity, so two structurally identical episodes would resolve to the same
-    index. At ~50k episodes that is both slow and wrong.
+    identity, so two structurally identical segments would resolve to the same
+    index. At ~50k segments that is both slow and wrong.
     """
-    if len(episodes) <= 1:
-        return episodes
+    if len(segments) <= 1:
+        return segments
 
-    out: list[Episode] = []
-    for idx, ep in enumerate(episodes):
-        if len(ep.messages) >= merge_below or not out:
-            out.append(ep)
+    out: list[Segment] = []
+    for idx, seg in enumerate(segments):
+        if len(seg.messages) >= merge_below or not out:
+            out.append(seg)
             continue
 
         prev = out[-1]
-        gap_prev = (ep.started_at - prev.ended_at).total_seconds()
+        gap_prev = (seg.started_at - prev.ended_at).total_seconds()
         gap_next = float("inf")
-        if idx + 1 < len(episodes):
-            gap_next = (episodes[idx + 1].started_at - ep.ended_at).total_seconds()
+        if idx + 1 < len(segments):
+            gap_next = (segments[idx + 1].started_at - seg.ended_at).total_seconds()
 
-        if gap_prev <= gap_next and len(prev.messages) + len(ep.messages) <= max_messages * 2:
-            prev.messages.extend(ep.messages)
+        if gap_prev <= gap_next and len(prev.messages) + len(seg.messages) <= max_messages * 2:
+            prev.messages.extend(seg.messages)
         else:
             # Leave it standing; the next iteration may absorb it forward.
-            out.append(ep)
+            out.append(seg)
     return out
 # ============================================================================
 #  2. EMBED TEXT CONSTRUCTION
@@ -287,7 +287,7 @@ def _merge_runts(episodes: list[Episode], merge_below: int, max_messages: int) -
 # ============================================================================
 
 def build_embed_text(
-    session: Episode,
+    session: Segment,
     chat_title: str,
     participant_names: Sequence[str],
     facts: Sequence[str] = (),

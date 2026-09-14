@@ -41,7 +41,7 @@ async def recall(query: str, date_from: str | None = None,
     """Search Yehor's life archive by meaning AND keyword (hybrid + rerank).
 
     Use for open-ended questions about what was said or happened: "what did we
-    decide about the apartment", "what do I know about X". Returns episodes
+    decide about the apartment", "what do I know about X". Returns segments
     (multi-message conversations), not individual messages, each with its date,
     thread and source event ids for citation.
 

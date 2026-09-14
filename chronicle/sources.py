@@ -100,7 +100,7 @@ POLICIES: list[SourcePolicy] = [
     # ---------------- Tier 3 — ARTIFACT -------------------------------------
     SourcePolicy(
         "immich", Density.TELEMETRY, Tier.ARTIFACT, "personal",
-        "Photos anchor episodes visually and corroborate travel.",
+        "Photos anchor segments visually and corroborate travel.",
         "Use EXIF dateTimeOriginal, NOT createdAt — a 2019 photo imported in "
         "2024 would otherwise land five years out. Burst shots must cluster.",
     ),

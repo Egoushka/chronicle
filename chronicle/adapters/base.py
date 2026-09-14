@@ -52,11 +52,11 @@ class Density(str, Enum):
     and retrieval precision collapses again.
 
     So every source declares its density, and the density decides the
-    aggregation policy BEFORE anything reaches the episode layer.
+    aggregation policy BEFORE anything reaches the segment layer.
     """
 
     #: Deliberate human utterance. Index at event granularity, segment into
-    #: episodes. telegram, gmail, slack, notion.
+    #: segments. telegram, gmail, slack, notion.
     NARRATIVE = "narrative"
 
     #: Discrete, meaningful, low-volume. One row is genuinely one thing that
@@ -65,7 +65,7 @@ class Density(str, Enum):
 
     #: Meaningful only in aggregate. Individual rows are noise; rolled-up
     #: spans are signal. wakapi heartbeats, dawarich GPS points, lastfm
-    #: scrobbles. The ADAPTER does the rollup — never the episode layer.
+    #: scrobbles. The ADAPTER does the rollup — never the segment layer.
     TELEMETRY = "telemetry"
 
     #: Weak attention signal, high volume. Worth having for "what was I
@@ -119,7 +119,7 @@ class Adapter(ABC):
     density: Density = Density.DISCRETE
 
     #: Only NARRATIVE sources get time-gap segmentation. A wakapi coding
-    #: session or a dawarich stay is ALREADY an episode — its adapter did the
+    #: session or a dawarich stay is ALREADY an segment — its adapter did the
     #: aggregation. Gap-fitting them produces meaningless numbers (measured:
     #: wakapi p90 = 2 days, which clamps to the 6h ceiling and then claims to
     #: be a session boundary).

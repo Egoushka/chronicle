@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 
 #: A rolled-up TELEMETRY event longer than this is a failed aggregation, not
-#: an episode. Set above a weekend indoors (measured max legitimate dawarich
+#: an segment. Set above a weekend indoors (measured max legitimate dawarich
 #: stay: 3,312 min = 2.3 days) and well below the failure it exists to catch
 #: (19,163 min = 13.3 days, every visit to one place merged into one event).
 MAX_ROLLUP_SPAN = timedelta(days=3)
@@ -97,7 +97,16 @@ def build(source: str):
 
     if source == "telegram":
         dsn = _env("TELEGRAM_DB_URL")
-        return cls(dsn) if dsn else None
+        if not dsn:
+            return None
+        raw = _env("TELEGRAM_EXCLUDE_CHAT_IDS") or ""
+        ids = tuple(int(p) for p in raw.replace(",", " ").split() if p)
+        # Default ON. An assistant's own chat laundering its output back to it
+        # as "memory" is the failure this prevents, and it is silent — see the
+        # comment in adapters/telegram.py:fetch.
+        nobots = (_env("TELEGRAM_EXCLUDE_BOT_CHATS") or "1").lower() \
+            not in ("0", "false", "no")
+        return cls(dsn, exclude_chat_ids=ids, exclude_bot_chats=nobots)
     if source == "wakapi":
         dsn, user = _env("WAKAPI_DB_PATH", "WAKAPI_DB_URL"), _env("WAKAPI_USER")
         return cls(dsn, user=user) if dsn and user else None
@@ -263,7 +272,7 @@ def _validate(source: str, rows: list, density: Density) -> list[str]:
                         "conversations")
 
     # 8. A rollup measured in DAYS is a failed aggregation wearing an
-    #    episode's clothes. dawarich grouped stays by spatial cluster alone,
+    #    segment's clothes. dawarich grouped stays by spatial cluster alone,
     #    so every visit to the same place merged into one event of 19,163
     #    minutes — 13.3 days, the entire span of the data. Checks 1-7 all
     #    passed it: the timestamps were real, ordered, unique and rolled up.
