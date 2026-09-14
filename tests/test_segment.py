@@ -55,25 +55,25 @@ def test_gap_fit_finds_valley_above_median_below_between_burst():
 def test_segmentation_compresses_and_leaves_no_singletons():
     msgs = make_corpus()
     fit = fit_gap_threshold([m.ts for m in msgs], chat_id=1)
-    eps = segment_chat(msgs, gap_seconds=fit.threshold_seconds)
+    segs = segment_chat(msgs, gap_seconds=fit.threshold_seconds)
 
-    ratio = len(msgs) / len(eps)
-    # ~14x measured. Extrapolates to ~48,700 episodes for the real 681,331.
+    ratio = len(msgs) / len(segs)
+    # ~14x measured. Extrapolates to ~48,700 segments for the real 681,331.
     assert 8 < ratio < 25, f"compression {ratio:.1f}x is outside the expected band"
 
-    sizes = [len(e.messages) for e in eps]
-    # A 1-event episode is per-message indexing reintroduced through the back
+    sizes = [len(e.messages) for e in segs]
+    # A 1-event segment is per-message indexing reintroduced through the back
     # door — the exact mistake this whole design exists to avoid.
-    assert min(sizes) > 1, "singleton episodes must be merged"
+    assert min(sizes) > 1, "singleton segments must be merged"
     assert max(sizes) <= 60, "message cap violated"
 
 
 def test_token_cap_is_soft_but_bounded():
     msgs = make_corpus()
-    eps = segment_chat(msgs, gap_seconds=1800, max_tokens=250)
-    # The cap is checked BEFORE appending, so an episode can exceed it by one
+    segs = segment_chat(msgs, gap_seconds=1800, max_tokens=250)
+    # The cap is checked BEFORE appending, so an segment can exceed it by one
     # event. Bounded overshoot is fine; unbounded is not.
-    assert max(e.approx_tokens for e in eps) < 400
+    assert max(e.approx_tokens for e in segs) < 400
 
 
 def test_reply_edge_suppresses_a_split():
@@ -85,15 +85,15 @@ def test_reply_edge_suppresses_a_split():
               "ответ", reply_to_id=1),
         Event(3, 1, 1, "me", base + timedelta(minutes=46), "понял"),
     ]
-    eps = segment_chat(msgs, gap_seconds=1800, merge_below=1)
+    segs = segment_chat(msgs, gap_seconds=1800, merge_below=1)
     # ...but the explicit reply edge says it is the same conversation.
-    assert len(eps) == 1, "reply edge should suppress the time-gap split"
+    assert len(segs) == 1, "reply edge should suppress the time-gap split"
 
 
 def test_substantive_filter_rejects_pure_filler():
     base = datetime(2021, 1, 1, 9, 0)
     filler = [Event(i, 1, 1, "me", base + timedelta(seconds=i * 10), "ок")
               for i in range(10)]
-    eps = segment_chat(filler, gap_seconds=1800)
-    assert not any(e.is_substantive() for e in eps), \
+    segs = segment_chat(filler, gap_seconds=1800)
+    assert not any(e.is_substantive() for e in segs), \
         "a burst of 'ок' is not a memory"

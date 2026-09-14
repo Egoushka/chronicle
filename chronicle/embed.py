@@ -41,7 +41,7 @@ class Embedder:
                  max_length: int = 1024):
         self.model_name = model_name or os.environ.get("EMBED_MODEL", "BAAI/bge-m3")
         self.use_fp16 = use_fp16
-        # Episodes are capped at ~250 tokens. BGE-M3 supports 8192, but
+        # Segments are capped at ~250 tokens. BGE-M3 supports 8192, but
         # padding to it wastes most of the forward pass.
         self.max_length = max_length
         self._model = None

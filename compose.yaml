@@ -189,7 +189,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in chronicle/.env}
       POSTGRES_USER: chronicle
       POSTGRES_DB: chronicle
-      # ~123 MB of halfvec(1024) for 60k episodes wants to live in RAM.
+      # ~123 MB of halfvec(1024) for 60k segments wants to live in RAM.
       # Exact scan over that is single-digit ms and every date filter stays
       # exact — no HNSW, so no percolation failure on 1%-cardinality filters.
       POSTGRES_INITDB_ARGS: "--data-checksums"

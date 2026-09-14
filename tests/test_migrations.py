@@ -59,8 +59,8 @@ def test_hybrid_search_lexical_branch_can_reach_its_index():
 
     A CTE referenced more than once is materialized, and a CTE scan cannot use
     an index. Factoring the filter predicates into one `filtered` CTE therefore
-    cost `episode_fts_idx` and made the lexical branch recompute to_tsvector()
-    over every substantive episode: measured 5,506 ms against 3.2 ms with the
+    cost `segment_fts_idx` and made the lexical branch recompute to_tsvector()
+    over every substantive segment: measured 5,506 ms against 3.2 ms with the
     index, and 5,694 ms against 120-255 ms for hybrid_search as a whole.
 
     If this test fails, someone has re-factored the duplicated predicates back
@@ -101,7 +101,8 @@ def test_lexical_predicate_matches_the_index_expression():
 
     # The predicate qualifies columns with the branch's table alias; the index
     # expression cannot. Strip aliases from both before comparing.
-    strip_alias = lambda s: re.sub(r"\b\w+\.(?=\w)", "", s)  # noqa: E731
+    def strip_alias(s):
+        return re.sub(r"\b\w+\.(?=\w)", "", s)
     normalized = {strip_alias(squash(u)) for u in used}
     expected = strip_alias(indexed_expr)
     assert normalized == {expected}, (
@@ -118,3 +119,36 @@ def test_retrieval_functions_declare_no_recency_prior(function):
     assert not re.search(r"\b(exp|recip)\s*\(\s*-?\s*(extract|age)", body,
                          re.IGNORECASE), (
         f"{function} has grown a recency decay term")
+
+
+def test_no_stale_episode_identifiers_in_migrations():
+    """The rename is complete in the schema of record.
+
+    `episodic` is deliberately NOT matched here: it shares no substring with
+    `episode` (…d-i-c vs …d-e), which is what made a plain substring pass safe
+    for the literature term in docs/RESEARCH.md.
+    """
+    for path in sorted(MIGRATIONS.glob("*.sql")):
+        text = path.read_text()
+        if path.name.startswith("003"):
+            continue          # the upgrade script names both sides by design
+        assert "episode" not in text and "Episode" not in text, (
+            f"{path.name} still names the old aggregate unit")
+
+
+def test_rename_migration_covers_every_implicit_object():
+    """BIGSERIAL and PRIMARY KEY invent names that appear nowhere in the source
+    and that ALTER TABLE ... RENAME TO does not touch. They were enumerated
+    from the live catalog; if one is dropped from 003 it survives the rename
+    and only surfaces years later in an error message naming an identifier that
+    no longer exists in the codebase."""
+    text = (MIGRATIONS / "003_rename_episode_to_segment.sql").read_text()
+    for implicit in (
+            "episode_episode_id_seq",        # BIGSERIAL
+            "episode_pkey",                  # PRIMARY KEY
+            "episode_time_order",            # named CHECK
+            "entity_mention_episode_id_fkey",
+            "fact_source_episode_id_fkey",
+            "commitment_resolution_episode_id_fkey",
+            "commitment_source_episode_id_fkey"):
+        assert implicit in text, f"003 does not rename {implicit}"

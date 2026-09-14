@@ -11,8 +11,8 @@ Every stage therefore checkpoints. An OOM kill costs one batch, not the run.
     python -m chronicle.worker doctor      # ALWAYS run this first
     python -m chronicle.worker ingest      # sources -> event
     python -m chronicle.worker fit-gaps    # measure per-thread session gaps
-    python -m chronicle.worker segment     # event -> episode
-    python -m chronicle.worker embed       # episode.embedding
+    python -m chronicle.worker segment     # event -> segment
+    python -m chronicle.worker embed       # segment.embedding
     python -m chronicle.worker enrich      # summary/topics/facts (slow, optional)
     python -m chronicle.worker all         # the above, in order
 
@@ -200,10 +200,10 @@ def cmd_fit_gaps(args) -> int:
 # ---------------------------------------------------------------------------
 
 def cmd_segment(args) -> int:
-    """event -> episode. The highest-value stage in the system.
+    """event -> segment. The highest-value stage in the system.
 
     Only NARRATIVE sources are segmented. TELEMETRY and DISCRETE events arrive
-    pre-aggregated from their adapters and map 1:1 to episodes — running a
+    pre-aggregated from their adapters and map 1:1 to segments — running a
     time-gap segmenter over them produces meaningless thresholds.
     """
     import json
@@ -236,11 +236,11 @@ def cmd_segment(args) -> int:
                             sender_name=r[3] or "?", ts=r[2],
                             text=r[4] or "", reply_to_id=None)
                       for i, r in enumerate(rows)]
-            groups = [[rows[e.message_id] for e in ep.messages]
-                      for ep in segment_chat(events, gap_seconds=gap)]
+            groups = [[rows[e.message_id] for e in seg.messages]
+                      for seg in segment_chat(events, gap_seconds=gap)]
         else:
-            # pre-aggregated: one event, one episode
-            # Pre-aggregated: one event, one episode. The adapter already did
+            # pre-aggregated: one event, one segment
+            # Pre-aggregated: one event, one segment. The adapter already did
             # the filtering, so these are substantive by construction.
             groups = [[r] for r in rows]
 
@@ -250,7 +250,7 @@ def cmd_segment(args) -> int:
                       f"[date: {g[0][2]:%Y-%m}]")
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO episode
+                    """INSERT INTO segment
                          (thread_key, sources, started_at, ended_at, event_count,
                           source_event_ids, raw_text, embed_text, is_substantive,
                           segmenter_version)
@@ -267,7 +267,7 @@ def cmd_segment(args) -> int:
             made += 1
         conn.commit()
 
-    log.info("created %d episodes", made)
+    log.info("created %d segments", made)
     return 0
 
 
@@ -295,7 +295,7 @@ def cmd_embed(args) -> int:
     while True:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT episode_id, embed_text FROM episode
+                """SELECT segment_id, embed_text FROM segment
                    WHERE embedding IS NULL
                    -- newest first, so recent data becomes useful while the
                    -- backfill is still grinding through 2019
@@ -308,10 +308,10 @@ def cmd_embed(args) -> int:
         vecs = emb.encode([r[1] for r in rows])["dense"]
         with conn.cursor() as cur:
             cur.executemany(
-                """UPDATE episode
+                """UPDATE segment
                       SET embedding = %s, lemmatized_text = %s,
                           embedder_version = %s
-                    WHERE episode_id = %s""",
+                    WHERE segment_id = %s""",
                 [(v.tolist(), lem(r[1]), EMBEDDER_VERSION, r[0])
                  for v, r in zip(vecs, rows)])
         conn.commit()

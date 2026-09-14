@@ -2,7 +2,7 @@
 --  Chronicle 001 — core schema
 --
 --  Generalized from the Telegram-specific design: raw_message -> event,
---  session -> episode. Everything else (bi-temporal facts, entities,
+--  session -> segment. Everything else (bi-temporal facts, entities,
 --  commitments, refcounting, star schema) is unchanged and source-agnostic.
 --
 --  Principles:
@@ -27,7 +27,7 @@ ALTER TEXT SEARCH CONFIGURATION ru_unaccent
 -- ---------------------------------------------------------------------------
 
 -- 18 channels are implemented. `density` is the load-bearing column: it
--- decides how hard a source is aggregated BEFORE anything reaches the episode
+-- decides how hard a source is aggregated BEFORE anything reaches the segment
 -- layer. Turning on every source without it reproduces the original mistake
 -- (indexing 681k sub-20-char messages) one level up, as the wrong source mix.
 CREATE TABLE source (
@@ -118,15 +118,15 @@ CREATE INDEX event_fts_idx ON event USING GIN (
 CREATE INDEX event_trgm_idx ON event USING GIN (text gin_trgm_ops);
 
 -- ---------------------------------------------------------------------------
---  LAYER 1 — episodes (the retrieval unit)
+--  LAYER 1 — segments (the retrieval unit)
 --
---  681,331 Telegram events -> ~50,000 episodes. Highest-value transformation
+--  681,331 Telegram events -> ~50,000 segments. Highest-value transformation
 --  in the system. SeCom: segment 71.57 > turn 65.58 > session 63.16 >
 --  summaries 53.87-56.25, measured at 30 tokens/turn. Ours are 5-10.
 -- ---------------------------------------------------------------------------
 
-CREATE TABLE episode (
-    episode_id    BIGSERIAL PRIMARY KEY,
+CREATE TABLE segment (
+    segment_id    BIGSERIAL PRIMARY KEY,
     thread_key    TEXT        NOT NULL,
     sources       TEXT[]      NOT NULL,      -- usually one; cross-source is allowed
     started_at    TIMESTAMPTZ NOT NULL,
@@ -161,16 +161,16 @@ CREATE TABLE episode (
     enriched_at   TIMESTAMPTZ,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    CONSTRAINT episode_time_order CHECK (ended_at >= started_at)
+    CONSTRAINT segment_time_order CHECK (ended_at >= started_at)
 );
 
-CREATE INDEX episode_ts_idx       ON episode (started_at);
-CREATE INDEX episode_thread_idx   ON episode (thread_key, started_at);
-CREATE INDEX episode_parts_idx    ON episode USING GIN (participant_ids);
-CREATE INDEX episode_topics_idx   ON episode USING GIN (topics);
-CREATE INDEX episode_sources_idx  ON episode USING GIN (sources);
-CREATE INDEX episode_unenriched_idx ON episode (created_at) WHERE enriched_at IS NULL;
-CREATE INDEX episode_fts_idx ON episode USING GIN (
+CREATE INDEX segment_ts_idx       ON segment (started_at);
+CREATE INDEX segment_thread_idx   ON segment (thread_key, started_at);
+CREATE INDEX segment_parts_idx    ON segment USING GIN (participant_ids);
+CREATE INDEX segment_topics_idx   ON segment USING GIN (topics);
+CREATE INDEX segment_sources_idx  ON segment USING GIN (sources);
+CREATE INDEX segment_unenriched_idx ON segment (created_at) WHERE enriched_at IS NULL;
+CREATE INDEX segment_fts_idx ON segment USING GIN (
     to_tsvector('ru_unaccent', coalesce(lemmatized_text, embed_text)));
 
 -- DELIBERATELY NO ANN INDEX.
@@ -179,8 +179,8 @@ CREATE INDEX episode_fts_idx ON episode USING GIN (
 -- fragments below p_c = 1/<k>; a one-month filter selects ~1.1% of the
 -- corpus, deep in the fragmentation regime. ChronoQA measured naive temporal
 -- filtering REDUCING recall (0.4903 vs 0.5458 R@5).
--- Revisit past ~1M episodes:
--- CREATE INDEX episode_hnsw_idx ON episode
+-- Revisit past ~1M segments:
+-- CREATE INDEX segment_hnsw_idx ON segment
 --   USING hnsw (embedding halfvec_cosine_ops) WITH (m=16, ef_construction=200);
 
 -- ---------------------------------------------------------------------------
@@ -208,10 +208,10 @@ CREATE INDEX entity_mentions_idx ON entity (mention_count DESC);
 
 CREATE TABLE entity_mention (
     entity_id  BIGINT NOT NULL REFERENCES entity(entity_id) ON DELETE CASCADE,
-    episode_id BIGINT NOT NULL REFERENCES episode(episode_id) ON DELETE CASCADE,
+    segment_id BIGINT NOT NULL REFERENCES segment(segment_id) ON DELETE CASCADE,
     ts         TIMESTAMPTZ NOT NULL,
     salience   REAL,
-    PRIMARY KEY (entity_id, episode_id)
+    PRIMARY KEY (entity_id, segment_id)
 );
 CREATE INDEX em_ts_idx ON entity_mention (ts);
 
@@ -249,7 +249,7 @@ CREATE TABLE fact (
     confidence    REAL NOT NULL DEFAULT 0.5,
     polarity      SMALLINT NOT NULL DEFAULT 1,
 
-    source_episode_id BIGINT REFERENCES episode(episode_id) ON DELETE CASCADE,
+    source_segment_id BIGINT REFERENCES segment(segment_id) ON DELETE CASCADE,
     source_event_ids  TEXT[] NOT NULL,
     extractor_version TEXT NOT NULL,
     refcount      INT NOT NULL DEFAULT 0,
@@ -282,9 +282,9 @@ CREATE TABLE commitment (
     due_at        TIMESTAMPTZ,
     status        TEXT NOT NULL DEFAULT 'open',
     resolved_at   TIMESTAMPTZ,
-    resolution_episode_id BIGINT REFERENCES episode(episode_id),
+    resolution_segment_id BIGINT REFERENCES segment(segment_id),
     confidence    REAL,
-    source_episode_id BIGINT REFERENCES episode(episode_id) ON DELETE CASCADE,
+    source_segment_id BIGINT REFERENCES segment(segment_id) ON DELETE CASCADE,
     source_event_ids  TEXT[] NOT NULL,
     extractor_version TEXT NOT NULL
 );

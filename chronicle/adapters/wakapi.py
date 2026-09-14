@@ -7,7 +7,7 @@ This is the adapter that proves the event-store generalization was worth
 building: it costs ~80 lines and immediately improves every timeline.
 
 Heartbeats are dense (one every ~2 min while typing), so they are rolled up
-into coding *durations* before they reach the episode layer. Emitting raw
+into coding *durations* before they reach the segment layer. Emitting raw
 heartbeats would reproduce the per-message indexing mistake in a new form.
 """
 

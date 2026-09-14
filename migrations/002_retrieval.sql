@@ -16,10 +16,10 @@
 --
 -- A CTE referenced twice is materialized by PostgreSQL, and a CTE scan cannot
 -- use an index. Factoring the filters out therefore cost the lexical branch
--- `episode_fts_idx` (001_core.sql:173, 25 MB GIN, expression-identical to the
+-- `segment_fts_idx` (001_core.sql:173, 25 MB GIN, expression-identical to the
 -- predicate below) and made it recompute to_tsvector() for every substantive
--- episode on every query. Measured on the live archive, 38,736 substantive
--- episodes:
+-- segment on every query. Measured on the live archive, 38,736 substantive
+-- segments:
 --
 --     lexical branch, via the materialized CTE     5,506 ms
 --     lexical branch, against the base table           3.2 ms
@@ -41,12 +41,12 @@ CREATE OR REPLACE FUNCTION hybrid_search(
     n_final      INT         DEFAULT 20,
     rrf_k        INT         DEFAULT 60
 )
-RETURNS TABLE (episode_id BIGINT, rrf_score DOUBLE PRECISION,
+RETURNS TABLE (segment_id BIGINT, rrf_score DOUBLE PRECISION,
                dense_rank INT, lex_rank INT) AS $$
 WITH dense AS (
-    SELECT e.episode_id,
+    SELECT e.segment_id,
            row_number() OVER (ORDER BY e.embedding <=> q_embedding)::int AS rnk
-    FROM episode e
+    FROM segment e
     WHERE e.is_substantive
       AND e.embedding IS NOT NULL
       AND (date_from     IS NULL OR e.started_at >= date_from)
@@ -57,14 +57,14 @@ WITH dense AS (
     LIMIT n_candidates
 ),
 lexical AS (
-    SELECT e.episode_id,
+    SELECT e.segment_id,
            row_number() OVER (
                ORDER BY ts_rank_cd(
                    to_tsvector('ru_unaccent', coalesce(e.lemmatized_text, e.embed_text)),
                    plainto_tsquery('ru_unaccent', q_text)) DESC)::int AS rnk
-    FROM episode e
+    FROM segment e
     WHERE e.is_substantive
-      -- Keep this expression character-identical to episode_fts_idx or the
+      -- Keep this expression character-identical to segment_fts_idx or the
       -- planner silently falls back to a sequential scan and the 45x is gone.
       AND to_tsvector('ru_unaccent', coalesce(e.lemmatized_text, e.embed_text))
           @@ plainto_tsquery('ru_unaccent', q_text)
@@ -74,10 +74,10 @@ lexical AS (
       AND (source_filter IS NULL OR e.sources && source_filter)
     LIMIT n_candidates
 )
-SELECT coalesce(d.episode_id, l.episode_id),
+SELECT coalesce(d.segment_id, l.segment_id),
        coalesce(1.0/(rrf_k + d.rnk), 0) + coalesce(1.0/(rrf_k + l.rnk), 0),
        d.rnk, l.rnk
-FROM dense d FULL OUTER JOIN lexical l USING (episode_id)
+FROM dense d FULL OUTER JOIN lexical l USING (segment_id)
 ORDER BY 2 DESC
 LIMIT n_final;
 $$ LANGUAGE sql STABLE;
@@ -87,7 +87,7 @@ $$ LANGUAGE sql STABLE;
 -- Top-k returns the k most SIMILAR, which are almost never the EARLIEST, and
 -- no value of k fixes that: similarity and recency are uncorrelated.
 -- Evidence: Test of Time single-fact 91.94% vs Timeline 31.66%.
--- Runs against `event`, NOT `episode` — a first mention is typically a bare
+-- Runs against `event`, NOT `segment` — a first mention is typically a bare
 -- token in a 15-char message.
 CREATE OR REPLACE FUNCTION first_mention(
     patterns TEXT[],
@@ -119,22 +119,22 @@ CREATE OR REPLACE FUNCTION stratified_search(
     bin_width   INTERVAL DEFAULT '3 months',
     per_bin     INT DEFAULT 10
 )
-RETURNS TABLE (bin_start TIMESTAMPTZ, episode_id BIGINT,
+RETURNS TABLE (bin_start TIMESTAMPTZ, segment_id BIGINT,
                distance DOUBLE PRECISION, rank_in_bin INT) AS $$
 WITH binned AS (
-    SELECT e.episode_id,
+    SELECT e.segment_id,
            to_timestamp(floor(extract(epoch FROM e.started_at)
                         / extract(epoch FROM bin_width))
                         * extract(epoch FROM bin_width)) AS bin_start,
            (e.embedding <=> q_embedding)::double precision AS dist
-    FROM episode e
+    FROM segment e
     WHERE e.embedding IS NOT NULL AND e.is_substantive
 ),
 ranked AS (
     SELECT b.*, row_number() OVER (PARTITION BY b.bin_start ORDER BY b.dist)::int AS rnk
     FROM binned b
 )
-SELECT r.bin_start, r.episode_id, r.dist, r.rnk
+SELECT r.bin_start, r.segment_id, r.dist, r.rnk
 FROM ranked r WHERE r.rnk <= per_bin
 ORDER BY r.bin_start, r.rnk;
 $$ LANGUAGE sql STABLE;
@@ -169,7 +169,7 @@ $$ LANGUAGE plpgsql;
 -- Two things this function deliberately does NOT do:
 --
 --   1. It does not touch non-conversational sources. A wakapi coding session
---      or a dawarich stay is ALREADY an episode — its adapter did the
+--      or a dawarich stay is ALREADY an segment — its adapter did the
 --      aggregation. Gap-fitting them produces a meaningless number (measured:
 --      wakapi p90 = 172,800 s = 2 days, which then clamps to the 6 h ceiling
 --      and silently claims to be a session boundary).
@@ -240,9 +240,9 @@ FROM event GROUP BY 1,2,3;
 
 CREATE OR REPLACE VIEW v_monthly_topics AS
 SELECT date_trunc('month', e.started_at)::date AS month, t AS topic,
-       count(*) AS episodes, avg(e.sentiment) AS mean_sentiment,
+       count(*) AS segments, avg(e.sentiment) AS mean_sentiment,
        avg(e.importance) AS mean_importance
-FROM episode e, unnest(e.topics) AS t GROUP BY 1,2;
+FROM segment e, unnest(e.topics) AS t GROUP BY 1,2;
 
 -- Current facts with deterministic max(version) resolution, in SQL.
 CREATE OR REPLACE VIEW v_current_facts AS
@@ -260,10 +260,10 @@ WHERE c.status = 'open' AND c.stated_at < now() - interval '90 days'
 ORDER BY c.stated_at;
 
 -- On-this-day. Highest value per line of code in the system.
--- Excludes episodes overlapping a sensitive life_event.
+-- Excludes segments overlapping a sensitive life_event.
 CREATE OR REPLACE VIEW v_on_this_day AS
 SELECT e.*
-FROM episode e
+FROM segment e
 WHERE extract(month FROM e.started_at) = extract(month FROM now())
   AND extract(day   FROM e.started_at) = extract(day   FROM now())
   AND e.started_at < date_trunc('year', now())
@@ -276,19 +276,19 @@ WHERE extract(month FROM e.started_at) = extract(month FROM now())
 ORDER BY e.importance DESC NULLS LAST;
 
 -- Facts eligible for promotion into Hindsight. Deliberately narrow: recurs
--- across >=3 episodes AND >=2 threads. Target hundreds/year, not thousands —
+-- across >=3 segments AND >=2 threads. Target hundreds/year, not thousands —
 -- the `personal` bank is already at 2,726 facts and times out on sync_retain.
 CREATE OR REPLACE VIEW v_promotable_facts AS
 SELECT f.fact_id, f.subject_id, f.predicate, f.object_text, f.t_valid,
        f.confidence, f.source_event_ids,
-       count(DISTINCT em.episode_id) AS episode_support,
-       count(DISTINCT ep.thread_key) AS thread_support
+       count(DISTINCT em.segment_id) AS segment_support,
+       count(DISTINCT seg.thread_key) AS thread_support
 FROM fact f
 JOIN entity_mention em ON em.entity_id = f.subject_id
-JOIN episode ep ON ep.episode_id = em.episode_id
+JOIN segment seg ON seg.segment_id = em.segment_id
 WHERE f.promoted_at IS NULL
   AND f.t_invalid IS NULL AND f.t_expired IS NULL
   AND f.confidence >= 0.7
 GROUP BY f.fact_id, f.subject_id, f.predicate, f.object_text, f.t_valid,
          f.confidence, f.source_event_ids
-HAVING count(DISTINCT em.episode_id) >= 3 AND count(DISTINCT ep.thread_key) >= 2;
+HAVING count(DISTINCT em.segment_id) >= 3 AND count(DISTINCT seg.thread_key) >= 2;

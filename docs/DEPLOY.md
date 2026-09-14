@@ -54,11 +54,11 @@ docker compose run --rm chronicle-worker python -m chronicle.worker ingest --sou
 docker compose run --rm chronicle-worker python -m chronicle.worker fit-gaps
 docker compose run --rm chronicle-worker python -m chronicle.worker segment
 ```
-Then **read 100 random episodes before trusting anything downstream.** If
+Then **read 100 random segments before trusting anything downstream.** If
 segmentation is wrong, everything inherits the damage — and it is much cheaper
 to find that out now than after a two-week enrichment run.
 
-**3. Embed.** ~50k episodes at ~60/s on CPU is roughly 20 minutes.
+**3. Embed.** ~50k segments at ~60/s on CPU is roughly 20 minutes.
 
 **4. Measure against grep.** Write 30–50 real questions, score `ripgrep` over a
 text dump, then score Chronicle. Letta hit 74% on LoCoMo with nothing but a
@@ -72,7 +72,7 @@ recent data becomes useful while the backfill grinds. Expect weeks on CPU.
 every timeline. This is the step that proves the event-store generalization
 was worth building.
 
-## After the episode index is live
+## After the segment index is live
 
 **Delete something.** Drop the `telegram_personal` Qdrant collection and the
 embedding path in `telegram-sync/app.py`. Stack count goes +1; responsibility

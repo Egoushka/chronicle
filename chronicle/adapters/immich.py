@@ -1,4 +1,4 @@
-"""Immich — photos. Visual episodes, travel, who you were with.
+"""Immich — photos. Visual segments, travel, who you were with.
 
 Immich runs its own Postgres 14 (`immich_postgres`, vectorchord build).
 

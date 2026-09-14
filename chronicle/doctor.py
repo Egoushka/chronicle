@@ -43,7 +43,7 @@ log = logging.getLogger(__name__)
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 
 #: A rolled-up TELEMETRY event longer than this is a failed aggregation, not
-#: an episode. Set above a weekend indoors (measured max legitimate dawarich
+#: an segment. Set above a weekend indoors (measured max legitimate dawarich
 #: stay: 3,312 min = 2.3 days) and well below the failure it exists to catch
 #: (19,163 min = 13.3 days, every visit to one place merged into one event).
 MAX_ROLLUP_SPAN = timedelta(days=3)
@@ -263,7 +263,7 @@ def _validate(source: str, rows: list, density: Density) -> list[str]:
                         "conversations")
 
     # 8. A rollup measured in DAYS is a failed aggregation wearing an
-    #    episode's clothes. dawarich grouped stays by spatial cluster alone,
+    #    segment's clothes. dawarich grouped stays by spatial cluster alone,
     #    so every visit to the same place merged into one event of 19,163
     #    minutes — 13.3 days, the entire span of the data. Checks 1-7 all
     #    passed it: the timestamps were real, ordered, unique and rolled up.

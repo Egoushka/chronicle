@@ -1,7 +1,7 @@
 """Telegram adapter — reads telegram-sync's SQLite/Postgres, never writes.
 
 telegram-sync stays a pure ingest+sync service. Chronicle owns aggregation
-and indexing. Once Chronicle's episode index is live, telegram-sync's own
+and indexing. Once Chronicle's segment index is live, telegram-sync's own
 `telegram_personal` Qdrant collection and its embedding path become
 redundant and should be deleted — the brain must REMOVE something, not just
 add a stack.

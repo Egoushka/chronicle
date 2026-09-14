@@ -531,7 +531,7 @@ def test_plain_events_default_watermark_to_ts():
 
 
 def test_substantive_filter_is_narrative_only():
-    """Regression: telemetry episodes were all marked non-substantive and so
+    """Regression: telemetry segments were all marked non-substantive and so
     were invisible to every query, because the filler-burst heuristic was
     written for Telegram and applied to everything."""
     from chronicle.worker import _substantive
@@ -544,3 +544,16 @@ def test_substantive_filter_is_narrative_only():
     from chronicle import worker
     src = inspect.getsource(worker.cmd_segment)
     assert 'density == "narrative" else True' in src
+
+
+def test_dawarich_eps_is_the_dbscan_radius_not_a_plural_of_segment():
+    """`eps` in the dawarich adapter is DBSCAN's epsilon, and it is a psycopg
+    NAMED bind — `%(eps)s` in the SQL matched to an "eps" dict key. A rename
+    pass that treats it as an abbreviation of the aggregate unit fails at
+    RUNTIME with KeyError, not at import, so nothing catches it until the next
+    dawarich ingest. Renamed episode -> segment on 2026-09-14; this file was
+    excluded from that pass deliberately."""
+    src = (Path(__file__).resolve().parent.parent
+           / "chronicle" / "adapters" / "dawarich.py").read_text()
+    assert "%(eps)s" in src, "dawarich lost its DBSCAN epsilon bind parameter"
+    assert '"eps"' in src, "the %(eps)s bind has no matching dict key"

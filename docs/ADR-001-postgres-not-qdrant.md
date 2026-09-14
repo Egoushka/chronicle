@@ -16,7 +16,7 @@ with **no ANN index**. Qdrant stays for `agent-runner`'s working memory.
 ## Why
 
 **ANN solves a problem that doesn't exist here.** After aggregation there are
-~50k episodes for one user. `halfvec(1024) × 50k ≈ 123 MB` — it fits in
+~50k segments for one user. `halfvec(1024) × 50k ≈ 123 MB` — it fits in
 `shared_buffers` and exact cosine over it is single-digit milliseconds.
 
 **Filtered ANN fails exactly where it's needed.** Qdrant's own filterable-HNSW
@@ -47,11 +47,11 @@ application round-trip, two backup regimes, and permanent reindex-drift risk.
   anyway, and there is no competitive RU/UK late-interaction model
   (jina-colbert-v2 MIRACL-ru 64.3 vs BGE-M3 dense 70.1).
 - Migration cost. Mitigated by the fact that the indexing unit changes from
-  message to episode, so everything is re-embedded regardless. **This is the
+  message to segment, so everything is re-embedded regardless. **This is the
   cheapest moment this decision will ever be.**
 
 ## Where it fails
 
-Past ~1M episodes exact scan stops being free. The fix is one line — pgvector
+Past ~1M segments exact scan stops being free. The fix is one line — pgvector
 supports HNSW — and it is a reversible decision. At ~90k new Telegram messages
 a year that point arrives well after 2035.
