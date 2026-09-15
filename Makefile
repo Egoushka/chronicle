@@ -1,4 +1,4 @@
-.PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab
+.PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab purge-excluded
 
 VENV  := .venv
 TOOLS := $(VENV)/bin/pytest
@@ -59,6 +59,22 @@ doctor-homelab: ## same, but ON the box — the sources are files and stack-priv
 
 ingest:    ## sources -> event -> episode -> embedding
 	python3 -m chronicle.worker all --tier $${TIER:-1}
+
+# Source filters are FETCH-time. Tightening one stops the next ingest and
+# leaves everything the old rule already indexed retrievable forever. Dry-run
+# by default and re-runnable on purpose — the exclusion rules have changed once
+# and will change again.
+#
+# ON THE BOX this has to run in chronicle-WORKER, not chronicle-api. Deciding
+# what to delete means reading each source's own database, and the worker is
+# the only container that mounts them (compose.yaml:168) — the api inherits
+# TELEGRAM_DB_URL from env_file and has no /srv/telegram at all, so it fails
+# with `sqlite3.OperationalError: unable to open database file`:
+#
+#   docker compose --profile batch run --rm chronicle-worker \
+#       python -m chronicle.purge          # add --apply to commit
+purge-excluded:  ## count what the adapters now exclude but already ingested (APPLY=1 to delete)
+	python3 -m chronicle.purge $(if $(APPLY),--apply,) $(if $(SOURCE),--source $(SOURCE),)
 
 eval-init: ## write the question template you must fill in by hand
 	python3 -m chronicle.evaluate init

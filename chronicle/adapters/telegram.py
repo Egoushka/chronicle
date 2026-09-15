@@ -154,3 +154,39 @@ class TelegramAdapter(SqlAdapter):
                     },
                     thread_key=f"telegram:{chat_id}",
                 )
+
+    def excluded_thread_keys(self) -> set[str]:
+        """The chats `fetch` filters out, as thread keys.
+
+        Deliberately the SAME three predicates as `fetch`, in the same union
+        order, because the purge is only correct while it selects exactly the
+        complement of what gets ingested. Kept as one query rather than reusing
+        `fetch`'s SQL string: that one is a row filter with `NOT`s threaded
+        through it, and inverting it textually is how the two drift apart.
+
+        Chat-level, not row-level. `thread_key` is `telegram:{chat_id}` for
+        every event (hard-won fact 12), so a chat is entirely in or entirely
+        out — there is no partially-excluded segment to split.
+        """
+        keys: set[str] = set()
+
+        if self.exclude_chat_ids:
+            keys |= {f"{self.source}:{c}" for c in self.exclude_chat_ids}
+
+        if self.exclude_bot_chats:
+            # Union of the two signals, for the reason given in `fetch`:
+            # neither is a superset (the tag alone misses the 92 bot-shaped
+            # usernames, the username rule alone misses BotFather). LEFT-join
+            # semantics are irrelevant here — a chat with no `chats` row has
+            # neither signal and so is not excluded, which is the same answer
+            # `fetch`'s `coalesce(lower(c.username),'')` gives it.
+            sql = """
+                SELECT chat_id FROM chats
+                 WHERE lower(coalesce(username,'')) LIKE %(botpat)s
+                UNION
+                SELECT chat_id FROM chat_tags WHERE tag = %(bottag)s
+            """
+            params = {"botpat": "%bot", "bottag": "chat:bot"}
+            keys |= {f"{self.source}:{row[0]}" for row in self._stream(sql, params)}
+
+        return keys

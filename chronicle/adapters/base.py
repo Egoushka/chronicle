@@ -138,6 +138,21 @@ class Adapter(ABC):
         61.4 GB of committed mem_limit on 32 GB of RAM is a routine event.
         """
 
+    def excluded_thread_keys(self) -> set[str]:
+        """Thread keys this adapter's own filters keep OUT of `fetch`.
+
+        Exclusion at fetch time only stops the NEXT ingest; it does not touch
+        what a previous, laxer rule already indexed. `chronicle.purge` reads
+        this to delete the difference, so the rule is expressed ONCE, here,
+        beside the `fetch` predicate it mirrors — a purge carrying its own
+        copy of the rule drifts from the filter the moment either is edited.
+
+        Empty means "this adapter excludes nothing", which is the honest
+        default: an adapter that filters but does not implement this silently
+        leaves its old rows behind forever.
+        """
+        return set()
+
     def healthcheck(self) -> tuple[bool, str]:
         try:
             next(iter(self.fetch(until=datetime.min.replace(tzinfo=None))), None)
