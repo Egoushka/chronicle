@@ -12,4 +12,14 @@ for m in migrations/*.sql; do
     psql -v ON_ERROR_STOP=1 -q -d "$DB" -f "$m"
 done
 psql -v ON_ERROR_STOP=1 -q -d "$DB" -f scripts/smoke.sql
+
+# The erasure path deletes across nine tables, three of whose edges do NOT
+# cascade, and every defect it has had so far was SQL semantics no unit test
+# can reach. Skipped rather than failed when psycopg is absent: `make test`
+# deliberately installs neither a driver nor a database.
+if python3 -c "import psycopg" 2>/dev/null; then
+    python3 scripts/purge-itest.py
+else
+    echo "purge-itest SKIPPED (no psycopg)"
+fi
 echo "smoke OK"

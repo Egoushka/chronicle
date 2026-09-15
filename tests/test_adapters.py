@@ -637,3 +637,53 @@ def test_telegram_exclude_chat_ids_are_coerced_to_int(telegram_db):
     assert ad.exclude_chat_ids == (111,)
     with pytest.raises(ValueError):
         TelegramAdapter(telegram_db, exclude_chat_ids=("111 OR 1=1",))
+
+
+# --------------------------------------------------------------------------
+#  excluded_thread_keys — the purge's half of the exclusion rule
+# --------------------------------------------------------------------------
+
+def test_excluded_thread_keys_is_exactly_the_complement_of_fetch(telegram_db):
+    """The invariant the purge rests on, and the one that rots silently.
+
+    Filtering is fetch-time, so tightening a rule leaves everything the old
+    rule already indexed retrievable forever. `chronicle.purge` deletes the
+    difference — which is only correct while this method selects exactly the
+    chats `fetch` refuses. Two hand-written SQL statements over the same tables
+    is precisely the shape that drifts, so assert it rather than trusting it.
+    """
+    ad = TelegramAdapter(telegram_db, exclude_chat_ids=(111,))
+    kept = {e.thread_key for e in ad.fetch()}
+    excluded = ad.excluded_thread_keys()
+
+    all_chats = {f"telegram:{c}" for c in (111, 222, 333, 444, 555)}
+    assert kept | excluded == all_chats, "some chat is in neither half"
+    assert kept & excluded == set(), "a chat is both fetched and purged"
+    assert excluded == {"telegram:111", "telegram:333", "telegram:444"}
+
+
+def test_excluded_thread_keys_unions_both_bot_signals(telegram_db):
+    """333 is bot-shaped by username, 444 only by the `chat:bot` tag. Either
+    signal alone leaves live rows behind: 92 chats match the username rule and
+    29 carry the tag, and the union is 5,806 messages."""
+    excluded = TelegramAdapter(telegram_db).excluded_thread_keys()
+    assert excluded == {"telegram:333", "telegram:444"}
+
+
+def test_excluded_thread_keys_is_empty_when_nothing_is_excluded(telegram_db):
+    """An adapter that filters nothing must purge nothing. The failure mode
+    this guards is a purge that deletes the whole corpus because the rule
+    inverted."""
+    ad = TelegramAdapter(telegram_db, exclude_bot_chats=False)
+    assert ad.excluded_thread_keys() == set()
+
+
+def test_every_adapter_answers_excluded_thread_keys():
+    """Base-class default is the empty set, so a new adapter cannot crash the
+    purge — but one that filters and never overrides this leaves its old rows
+    indexed forever, which is the bug the whole target exists to fix."""
+    from chronicle.adapters import ADAPTERS
+    from chronicle.adapters.base import Adapter
+    for name, cls in ADAPTERS.items():
+        assert hasattr(cls, "excluded_thread_keys"), name
+    assert Adapter.excluded_thread_keys(object()) == set()
