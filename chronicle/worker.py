@@ -434,10 +434,18 @@ def _update_segment(cur, segment_id: int, fields: tuple) -> None:
 
 
 def _substantive(group) -> bool:
-    """A burst of 'ок' is not a memory."""
-    if len(group) < 3:
-        return len(group) == 1 and len((group[0][4] or "")) > 80
+    """A burst of 'ок' is not a memory — but two long messages are.
+
+    Below three messages the only test used to be `len == 1 and > 80 chars`,
+    so EVERY two-message segment was hidden from /recall however long: 2,812
+    telegram segments, 525 of them 200+ chars, and 5 of the 57 gold messages
+    in the first eval (2026-09-26) — "got an offer", "we're being evicted"
+    are exactly the short exchanges that matter. Short segments now pass on
+    content alone; the distinct-text test still guards 3+ message bursts.
+    """
     content = sum(len(r[4] or "") for r in group)
+    if len(group) < 3:
+        return content > 80
     distinct = {(r[4] or "").strip().lower() for r in group}
     return content >= 80 and len(distinct) >= 3
 

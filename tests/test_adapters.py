@@ -867,3 +867,14 @@ def test_telegram_outgoing_messages_have_one_author(telegram_db):
     sent = [e for e in TelegramAdapter(telegram_db, exclude_bot_chats=False).fetch()
             if e.payload["direction"] == "sent"]
     assert sent and {e.actor for e in sent} == {"me"}
+
+
+def test_two_long_messages_are_substantive():
+    """Every 2-message segment used to be hidden from /recall, however long."""
+    from chronicle.worker import _substantive
+    ts = datetime(2026, 9, 1)
+    row = lambda text: ("telegram", "1:1", ts, "Anna", text, None, None, None, None)
+    assert _substantive([row("Завтра о девʼятій зустрічаємось біля вокзалу, квитки вже купила"),
+                         row("Добре. Візьму каву на двох")]) is True
+    assert _substantive([row("ок"), row("ага")]) is False
+    assert _substantive([row("ок")]) is False
