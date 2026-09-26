@@ -6,6 +6,37 @@
 --  evolve" needs stratified coverage and heavy synthesis. Different systems.
 -- ============================================================================
 
+-- Document frequency of every lexeme over the substantive segments — the IDF
+-- that the lexical branch of hybrid_search weights by. Refreshed by the
+-- worker after each `embed` (refresh_lexeme_df(), ~7 s over 39k segments).
+-- Empty until the first refresh, and then the lexical branch simply returns
+-- nothing and search is dense-only — never an error.
+CREATE TABLE IF NOT EXISTS lexeme_df (
+    word  TEXT PRIMARY KEY,
+    ndoc  INT  NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lexeme_df_meta (
+    singleton    BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+    ndocs        INT NOT NULL,
+    refreshed_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE OR REPLACE FUNCTION refresh_lexeme_df() RETURNS INT AS $$
+DECLARE n INT;
+BEGIN
+  TRUNCATE lexeme_df;
+  INSERT INTO lexeme_df (word, ndoc)
+  SELECT word, ndoc FROM ts_stat($q$
+      SELECT to_tsvector('ru_unaccent', coalesce(lemmatized_text, embed_text))
+        FROM segment WHERE is_substantive $q$);
+  SELECT count(*) INTO n FROM segment WHERE is_substantive;
+  INSERT INTO lexeme_df_meta (singleton, ndocs, refreshed_at) VALUES (TRUE, n, now())
+  ON CONFLICT (singleton) DO UPDATE SET ndocs = EXCLUDED.ndocs, refreshed_at = now();
+  ANALYZE lexeme_df;
+  RETURN n;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Hybrid retrieval with Reciprocal Rank Fusion.
 -- RRF over weighted score fusion: no normalization needed, robust to the two
 -- retrievers' incomparable scales. k=60 is standard.
@@ -56,22 +87,42 @@ WITH dense AS (
     ORDER BY e.embedding <=> q_embedding
     LIMIT n_candidates
 ),
+-- The question's RARE terms, each weighted by IDF. The lexical branch used to
+-- be plainto_tsquery(q_text): an AND of every word in the question, which on
+-- the 28 eval lookups (2026-09-26) matched ZERO segments for 27 — the branch
+-- was dead and every lookup was dense-only. A plain OR is no better: it
+-- matched ~15k segments and ts_rank_cd, having no IDF, let "як", "і", "коли"
+-- decide the order. Dropping terms in more than 5% of segments removes those
+-- (and every Ukrainian stopword the Russian config does not know) by
+-- measurement rather than by list.
+kept AS (
+    SELECT d.word, ln(m.ndocs::float / d.ndoc) AS idf
+    FROM unnest(tsvector_to_array(to_tsvector('ru_unaccent', q_text))) AS w(word)
+    JOIN lexeme_df d USING (word)
+    CROSS JOIN lexeme_df_meta m
+    WHERE d.ndoc < 0.05 * m.ndocs
+),
 lexical AS (
+    -- One index probe per kept term, then summed IDF per segment (BM25 with
+    -- no length or frequency terms). 8 ms on the live archive; scoring every
+    -- OR-match with a per-row tsvector instead took 1,075 ms.
     SELECT e.segment_id,
-           row_number() OVER (
-               ORDER BY ts_rank_cd(
-                   to_tsvector('ru_unaccent', coalesce(e.lemmatized_text, e.embed_text)),
-                   plainto_tsquery('ru_unaccent', q_text)) DESC)::int AS rnk
+           row_number() OVER (ORDER BY sum(k.idf) DESC, e.segment_id)::int AS rnk
     FROM segment e
-    WHERE e.is_substantive
+    JOIN kept k
       -- Keep this expression character-identical to segment_fts_idx or the
       -- planner silently falls back to a sequential scan and the 45x is gone.
-      AND to_tsvector('ru_unaccent', coalesce(e.lemmatized_text, e.embed_text))
-          @@ plainto_tsquery('ru_unaccent', q_text)
+      ON to_tsvector('ru_unaccent', coalesce(e.lemmatized_text, e.embed_text))
+         @@ quote_literal(k.word)::tsquery
+    WHERE e.is_substantive
       AND (date_from     IS NULL OR e.started_at >= date_from)
       AND (date_to       IS NULL OR e.started_at <= date_to)
       AND (thread_filter IS NULL OR e.thread_key = ANY(thread_filter))
       AND (source_filter IS NULL OR e.sources && source_filter)
+    GROUP BY e.segment_id
+    -- ORDER BY before LIMIT: the old branch had none, so past 100 matches it
+    -- kept an arbitrary 100 rather than the best.
+    ORDER BY rnk
     LIMIT n_candidates
 )
 SELECT coalesce(d.segment_id, l.segment_id),
