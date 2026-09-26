@@ -171,7 +171,11 @@ services:
       # no room for a 5 GB model either. See chronicle/enrich.py.
       ENRICH_MODEL: ${ENRICH_MODEL:-gemini-3.5-flash-lite}
       ENRICH_URL: http://litellm:4000/v1
-      ENRICH_LIMIT: ${ENRICH_LIMIT:-2000}
+      # 0 = off, pending measurement. The first batch (2,446 newest segments,
+      # 2026-09-26) moved the eval from 55.0% to 52.3% — about one lookup of
+      # 28, not conclusive, and not positive. Set ENRICH_LIMIT in .env to turn
+      # it back on for an A/B run against `make eval-homelab`.
+      ENRICH_LIMIT: ${ENRICH_LIMIT:-0}
       # Same reasoning as chronicle-api above. The worker encodes in batches
       # rather than one query at a time, so it is less sensitive than the API,
       # but it runs on the same contended 16 cores.
