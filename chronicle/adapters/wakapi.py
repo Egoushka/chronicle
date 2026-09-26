@@ -87,58 +87,61 @@ class WakapiAdapter(SqlAdapter):
         yield from self._rollup(self._stream(sql, params))
 
     def _rollup(self, rows) -> Iterator[SourceEvent]:
-        """Collapse dense heartbeats into coding-session durations."""
-        cur_project = None
-        start = last = None
-        langs: set[str] = set()
-        files: set[str] = set()
+        """Collapse dense heartbeats into coding sessions, PER PROJECT.
 
-        def emit():
-            if cur_project is None or start is None:
-                return None
-            minutes = max(1, int((last - start).total_seconds() // 60))
-            return SourceEvent(
-                source=self.source,
-                source_id=f"{cur_project}:{start.isoformat()}",
-                ts=start,
-                text=f"coded on {cur_project} for {minutes} min "
-                     f"({', '.join(sorted(langs))})",
-                actor=self.user,
-                kind="coding_session",
-                payload={
-                    "project": cur_project,
-                    "languages": sorted(langs),
-                    "files_touched": len(files),
-                    "minutes": minutes,
-                    "ended_at": last.isoformat(),
-                },
-                thread_key=f"wakapi:{cur_project}",
-                watermark_ts=last,   # span END, not start — see SourceEvent.watermark_ts
-            )
+        The first version closed the session whenever the project changed.
+        That was right for one editor on one repo and wrong the day several
+        Claude Code sessions ran side by side: heartbeats from three repos
+        interleave on every tick, so 2,420 of 2,898 sessions (2026-09-26) were
+        a single heartbeat long — per-heartbeat indexing back in through the
+        side door. Each project now keeps its own open session and only a
+        15-minute gap in THAT project closes it.
+
+        Emitted in order of session END, which is the watermark: a committed
+        batch then never skips a heartbeat of a session still open. Buffers
+        the run's heartbeats — a night's worth, or ~19k on a full re-read.
+        """
+        open_: dict[str, dict] = {}
+        done: list[SourceEvent] = []
 
         for raw_ts, project, language, entity, _branch in rows:
-            # SQLite hands back TEXT here, Postgres hands back datetime.
+            # SQLite hands back TEXT or INTEGER here, Postgres a datetime.
             ts = coerce_ts(raw_ts)
             if ts is None:
                 continue
-            new_block = (
-                cur_project is not None
-                and (project != cur_project or ts - last > HEARTBEAT_GAP)
-            )
-            if new_block:
-                ev = emit()
-                if ev:
-                    yield ev
-                start, langs, files = ts, set(), set()
-            if cur_project != project or start is None:
-                start = start or ts
-            cur_project = project
-            last = ts
+            cur = open_.get(project)
+            if cur is not None and ts - cur["last"] > HEARTBEAT_GAP:
+                done.append(self._session(project, cur))
+                cur = None
+            if cur is None:
+                cur = open_[project] = {"start": ts, "last": ts,
+                                        "langs": set(), "files": set()}
+            cur["last"] = max(cur["last"], ts)
             if language:
-                langs.add(language)
+                cur["langs"].add(language)
             if entity:
-                files.add(entity)
+                cur["files"].add(entity)
 
-        ev = emit()
-        if ev:
-            yield ev
+        done += [self._session(p, c) for p, c in open_.items()]
+        yield from sorted(done, key=lambda e: (e.watermark_ts, e.source_id))
+
+    def _session(self, project: str, s: dict) -> SourceEvent:
+        minutes = max(1, int((s["last"] - s["start"]).total_seconds() // 60))
+        return SourceEvent(
+            source=self.source,
+            source_id=f"{project}:{s['start'].isoformat()}",
+            ts=s["start"],
+            text=f"coded on {project} for {minutes} min "
+                 f"({', '.join(sorted(s['langs']))})",
+            actor=self.user,
+            kind="coding_session",
+            payload={
+                "project": project,
+                "languages": sorted(s["langs"]),
+                "files_touched": len(s["files"]),
+                "minutes": minutes,
+                "ended_at": s["last"].isoformat(),
+            },
+            thread_key=f"wakapi:{project}",
+            watermark_ts=s["last"],   # span END, not start — see SourceEvent.watermark_ts
+        )

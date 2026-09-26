@@ -832,3 +832,26 @@ def test_karakeep_resumes_in_seconds_and_reads_text_bookmarks(tmp_path):
     ad = KarakeepAdapter(str(db))
     assert [e.text for e in ad.fetch()] == ["A page", "idea: segment by reply chains"]
     assert [e.source_id for e in ad.fetch(since=base + timedelta(days=1))] == ["b"]
+
+
+def test_wakapi_interleaved_projects_do_not_fragment(tmp_path):
+    """Three Claude Code sessions in three repos, heartbeats interleaved on
+    every tick. Closing on each project switch made 2,420 of 2,898 live
+    sessions one heartbeat long; per-project sessions make three."""
+    db = tmp_path / "wakapi.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE heartbeats (user_id TEXT, time TIMESTAMP, "
+                 "project TEXT, language TEXT, entity TEXT, branch TEXT)")
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    conn.executemany("INSERT INTO heartbeats VALUES (?,?,?,?,?,?)", [
+        ("yehor", int((base + timedelta(minutes=i)).timestamp() * 1000),
+         ("AcmeBE", "chronicle", "homelab-gitops")[i % 3], "Python", "f.py", "main")
+        for i in range(60)])
+    conn.commit()
+    conn.close()
+
+    events = list(WakapiAdapter(str(db), user="yehor").fetch())
+    assert len(events) == 3, [e.text for e in events]
+    assert all(e.payload["minutes"] >= 57 for e in events)
+    marks = [e.watermark_ts for e in events]
+    assert marks == sorted(marks), "must stream in watermark order for resume"
