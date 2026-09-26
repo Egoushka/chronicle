@@ -115,7 +115,14 @@ def score(questions: list[Question], answer: Callable[[Question], list[str]]
 #  baseline: ripgrep over a flat dump
 # ---------------------------------------------------------------------------
 
-def grep_answerer(dump: Path, limit: int = 20) -> Callable[[Question], list[str]]:
+#: Event ids each side may return per question. Equal on purpose: chronicle
+#: answers with whole segments (~13 events each), so 20 segments flattened is
+#: ~260 ids against grep's 20 lines — a 13x reading budget that makes recall
+#: incomparable. 200 is about 15 segments, or 200 grep hits; p@1 is unaffected.
+BUDGET = 200
+
+
+def grep_answerer(dump: Path, limit: int = BUDGET) -> Callable[[Question], list[str]]:
     """The bar Chronicle has to clear.
 
     The dump is one line per event: `source:source_id\\tISO_TS\\ttext`.
@@ -143,15 +150,23 @@ def chronicle_answerer(base_url: str) -> Callable[[Question], list[str]]:
 
     def answer(qn: Question) -> list[str]:
         if qn.kind == "first_mention":
-            r = client.post("/first-mention", json={"term": qn.question})
-            r.raise_for_status()
-            return [f"{c['source']}:{c['source_id']}" for c in r.json()["candidates"]]
+            # The TERM, as the MCP tool is called — not the question. Sent the
+            # whole sentence, the api lemmatised every word into a pattern
+            # ("when", "did", "i", ...) and matched nearly any message. Each
+            # spelling the grep baseline gets, merged earliest-first.
+            cands = []
+            for term in qn.keywords or [qn.question]:
+                r = client.post("/first-mention", json={"term": term})
+                r.raise_for_status()
+                cands += r.json()["candidates"]
+            cands.sort(key=lambda c: c["date"])
+            return [f"{c['source']}:{c['source_id']}" for c in cands][:BUDGET]
         r = client.post("/recall", json={"query": qn.question, "limit": 20})
         r.raise_for_status()
         out: list[str] = []
         for hit in r.json()["results"]:
             out.extend(hit["evidence"])
-        return out
+        return out[:BUDGET]
     return answer
 
 
