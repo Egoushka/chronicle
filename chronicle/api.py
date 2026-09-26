@@ -182,7 +182,10 @@ def first_mention(req: FirstMentionReq):
     is typically a bare token in a 15-character message.
     """
     lemma = _state["lemmatizer"](req.term)
-    patterns = sorted({req.term.lower(), lemma, *lemma.split()})
+    # The term and its lemma, whole. Splitting a multi-word lemma into words
+    # made "game of thrones" also search for "of", which every other message
+    # contains (and each pattern is an ILIKE too). One word splits to itself.
+    patterns = sorted({req.term.lower(), lemma})
     rows = q("SELECT * FROM first_mention(%s, 20)", (patterns,))
     return {
         "term": req.term,

@@ -149,6 +149,15 @@ def chronicle_answerer(base_url: str) -> Callable[[Question], list[str]]:
     client = httpx.Client(base_url=base_url, timeout=120.0)
 
     def answer(qn: Question) -> list[str]:
+        # An api error is a miss, not a crash: the question still counts
+        # against chronicle, and one bad endpoint cannot hide the rest.
+        try:
+            return _answer(qn)
+        except httpx.HTTPStatusError as exc:
+            log.warning("chronicle failed %r: %s", qn.question, exc)
+            return []
+
+    def _answer(qn: Question) -> list[str]:
         if qn.kind == "first_mention":
             # The TERM, as the MCP tool is called — not the question. Sent the
             # whole sentence, the api lemmatised every word into a pattern
