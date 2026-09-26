@@ -254,6 +254,18 @@ def run() -> int:
           q("""SELECT count(DISTINCT (projection_kind, projection_id))
                  FROM projection_dep""")[0][0], 6)
 
+    # A dead endpoint stops after ONE batch instead of burning ENRICH_LIMIT
+    # calls, and `all` still embeds but exits non-zero (nightly.sh -> ntfy).
+    tg.transcribe(4, "[voice] трикімнатна, без меблів, з балконом")
+    worker.cmd_ingest(args)
+    Stub.calls = 0
+    os.environ["ENRICH_URL"] = "http://127.0.0.1:9/v1"       # nothing listens
+    rc = worker.cmd_enrich(args)
+    check("dead endpoint: enrich reports failure", rc, 1)
+    check("dead endpoint: nothing half-written",
+          q("SELECT count(*) FROM segment WHERE enriched_at IS NULL")[0][0], 1)
+    os.environ["ENRICH_URL"] = f"http://127.0.0.1:{srv.server_port}/v1"
+
     srv.shutdown()
     width = max(len(c[0]) for c in checks)
     bad = 0

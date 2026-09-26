@@ -544,12 +544,22 @@ def cmd_enrich(args) -> int:
                     log.warning("enrich segment %s failed: %s", r[0], exc)
                     return r, None
 
+            batch_ok = 0
             for r, reply in pool.map(call, rows):
                 if reply is None:
                     failed += 1
                     continue
                 _write_enrichment(conn, r, reply, set(predicates), *chats[r[0]])
                 done += 1
+                batch_ok += 1
+            if not batch_ok:
+                # A whole batch failing is the endpoint, not the segments: a
+                # rotated key (chronicle's died with the 2026-09-23 LiteLLM
+                # rotation), a renamed model, an outage. Carrying on would
+                # spend ENRICH_LIMIT calls learning the same thing.
+                log.error("enrich: all %d calls in a batch failed — stopping; "
+                          "check ENRICH_MODEL and the LiteLLM key", len(rows))
+                return 1
             with conn.cursor() as cur:
                 cur.execute("SELECT resolve_fact_conflicts()")
             conn.commit()
@@ -687,12 +697,20 @@ COMMANDS = {
 def cmd_all(args) -> int:
     # enrich BEFORE embed: enriching rewrites embed_text and clears the
     # embedding, so this order re-encodes it in the same run.
+    #
+    # enrich is the one stage whose failure must not stop the run: it depends
+    # on a cloud endpoint, and new segments are searchable without it but not
+    # without `embed`. So embed still runs, and the failure is the exit code,
+    # which is what makes nightly.sh send its ntfy.
+    deferred = 0
     for name in ("ingest", "fit-gaps", "segment", "enrich", "embed"):
         log.info("=== %s ===", name)
         rc = COMMANDS[name](args)
-        if rc:
+        if rc and name == "enrich":
+            deferred = rc
+        elif rc:
             return rc
-    return 0
+    return deferred
 
 
 def main(argv: list[str] | None = None) -> int:
