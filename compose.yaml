@@ -1,10 +1,12 @@
 ## chronicle — personal event store and retrieval brain. Ingests Telegram,
-## wakapi, dawarich (and more) into one timeline; serves it to agent-runner
-## over MCP so the assistant can actually look things up about Yehor's life.
+## wakapi, dawarich (and more) into one timeline; serves it over MCP so an
+## assistant can actually look things up about Yehor's life.
 ## Deploy: /srv/stacks/chronicle
-## Reached via: tailnet only — chronicle-api on 127.0.0.1:8030, MCP on :8031.
-##   No Caddy vhost: this is the most sensitive data on the box, agent-runner
-##   reaches it over `edge`, and nothing else needs to.
+## Reached via: 127.0.0.1:8030 (api) and :8031 (MCP) on the box, i.e. an SSH
+##   tunnel; synapse over `chronicle_default`. No Caddy vhost and no `edge`:
+##   this is the most sensitive data on the box. agent-runner, the one `edge`
+##   consumer, is retired (headroom/compose.yaml) and metamcp does not register
+##   chronicle — verified on the box 2026-09-26.
 ## Depends on: telegram-sync (read-only), optionally wakapi + dawarich
 
 services:
@@ -102,7 +104,7 @@ services:
     depends_on:
       chronicle-db:
         condition: service_healthy
-    networks: [default, edge]
+    networks: [default]  # off edge 2026-09-24: /tally ran SQL as superuser, no auth
 
   chronicle-mcp:
     build:
@@ -139,7 +141,7 @@ services:
       - autoheal=true
 
     depends_on: [chronicle-api]
-    networks: [default, edge]
+    networks: [default]  # off edge 2026-09-24: /tally ran SQL as superuser, no auth
 
   # ---------------------------------------------------------------------------
   # Batch enrichment. `restart: "no"` is load-bearing, not laziness.
@@ -246,6 +248,9 @@ networks:
       config:
         # Registered in NETWORKS.md. 10.211.70.0/24 is telegram-sync.
         - subnet: 10.211.71.0/24
+  # Unused since 2026-09-24. Kept so rejoining is one line per service, and
+  # /tally is now safe to expose (migrations/004_tally_role.sql) — but nothing
+  # on `edge` needs chronicle today, so do not rejoin without a consumer.
   edge:
     external: true
     name: headscale_headscale_net
