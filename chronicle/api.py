@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
     import psycopg_pool
     _state["pool"] = psycopg_pool.ConnectionPool(DB_URL, min_size=1, max_size=4,
                                                  open=True)
+    _state["tally_dsn"] = _rotate_tally_password()
     # Models load lazily: the healthcheck has a 180s start_period but must
     # answer before BGE-M3 is warm, or autoheal restarts us in a loop.
     _state["embedder"] = Embedder()
@@ -52,6 +53,53 @@ def q(sql: str, params: tuple = ()) -> list[tuple]:
     with _state["pool"].connection() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return cur.fetchall()
+
+
+TALLY_ROLE = "chronicle_tally"
+
+
+def _rotate_tally_password() -> str | None:
+    """Give chronicle_tally a fresh random password; return its DSN.
+
+    Set by the superuser pool on every start, so the credential lives only in
+    this process and there is nothing to add to .env. None when 004 has not
+    been applied: /tally then refuses rather than falling back to superuser.
+    """
+    import secrets
+
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+    password = secrets.token_urlsafe(32)
+    try:
+        with _state["pool"].connection() as conn:
+            conn.execute(sql.SQL("ALTER ROLE {} PASSWORD {}").format(
+                sql.Identifier(TALLY_ROLE), sql.Literal(password)))
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("/tally disabled: cannot set %s password: %s", TALLY_ROLE, exc)
+        return None
+    return make_conninfo(DB_URL, user=TALLY_ROLE, password=password)
+
+
+def q_tally(query: str) -> list[tuple]:
+    """Run caller-supplied SQL as chronicle_tally, on a connection of its own.
+
+    Not the pool: statement_timeout and default_transaction_read_only are
+    user-settable, and a `SELECT set_config(..., false); COMMIT; ...` would
+    leave a pooled connection loosened for the next caller. A fresh connection
+    that is closed without committing takes any such change with it. /tally
+    served 0 calls in the 72 h before 2026-09-26, so a connect per call is free.
+    """
+    import psycopg
+    if not _state.get("tally_dsn"):
+        raise HTTPException(503, "tally role unavailable; apply migrations/004_tally_role.sql")
+    conn = psycopg.connect(_state["tally_dsn"], connect_timeout=5)
+    try:
+        return conn.execute(query).fetchall()
+    except psycopg.Error as exc:
+        # The agent wrote this SQL; the error is what lets it fix the query.
+        raise HTTPException(400, f"{type(exc).__name__}: {exc}") from exc
+    finally:
+        conn.close()   # never commit: closing discards the transaction
 
 
 # The browser surface. Served from this app rather than a static host so it
@@ -184,20 +232,17 @@ class TallyReq(BaseModel):
 def tally(req: TallyReq):
     """Counting and ranking are SQL, not retrieval.
 
-    The caller supplies the SQL (agent-runner writes it). We execute it
-    read-only and return it alongside the result — text-to-SQL is ~80%
-    accurate even on simple schemas, so a query the user cannot see is a
-    number they cannot trust.
+    The caller supplies the SQL (the agent writes it). We execute it as the
+    SELECT-only chronicle_tally role and return it alongside the result —
+    text-to-SQL is ~80% accurate even on simple schemas, so a query the user
+    cannot see is a number they cannot trust.
+
+    No keyword filtering: it was never a boundary (`WITH x AS (DELETE ...)
+    SELECT` passed it). The role is — see migrations/004_tally_role.sql.
     """
     if not req.sql:
         raise HTTPException(400, "supply `sql`; the agent writes it, chronicle runs it")
-    lowered = req.sql.strip().lower()
-    if not lowered.startswith(("select", "with")):
-        raise HTTPException(400, "read-only: only SELECT/WITH are accepted")
-    if any(tok in lowered for tok in (" insert ", " update ", " delete ", " drop ",
-                                      " alter ", " create ", " grant ", ";")):
-        raise HTTPException(400, "read-only: statement rejected")
-    rows = q(req.sql)
+    rows = q_tally(req.sql)
     return {"question": req.question, "sql": req.sql,
             "row_count": len(rows), "rows": [list(map(str, r)) for r in rows[:200]]}
 

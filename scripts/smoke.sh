@@ -19,7 +19,8 @@ psql -v ON_ERROR_STOP=1 -q -d "$DB" -f scripts/smoke.sql
 # deliberately installs neither a driver nor a database.
 if python3 -c "import psycopg" 2>/dev/null; then
     python3 scripts/purge-itest.py
+    python3 scripts/tally-itest.py "$DB"
 else
-    echo "purge-itest SKIPPED (no psycopg)"
+    echo "purge-itest, tally-itest SKIPPED (no psycopg)"
 fi
 echo "smoke OK"
