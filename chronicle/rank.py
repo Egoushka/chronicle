@@ -63,3 +63,30 @@ def apply_cheap_signals(cands: Sequence[Candidate], intent: Intent) -> list[Cand
     return sorted(out, key=lambda c: c.rrf, reverse=True)
 
 
+
+
+def spelling_variants(lexemes, lookup, min_key: int = 3, per_key: int = 3) -> list[str]:
+    """Other spellings of a question's terms that occur in the archive.
+
+    The chats write the same name in Cyrillic and Latin, and in Russian and
+    Ukrainian — `EPAM` and `Епам`, `Одеса` and `Одесса` — and the question
+    rarely uses the chat's spelling. Measured on the eval lookups: EPAM
+    (12 Latin vs 21 Cyrillic segments) and Odesa (61 Ukrainian vs 337
+    Russian) were both unreachable for exactly this reason.
+
+    `lookup(keys)` returns (key, word, ndoc) for archive lexemes sharing a key.
+    Keys shorter than `min_key` are skipped: resolve.translit_key is lossy on
+    purpose, and a 2-letter key collides with everything.
+    """
+    from .resolve import translit_key
+    own = set(lexemes)
+    keys = {translit_key(w) for w in lexemes}
+    keys = {k for k in keys if len(k) >= min_key}
+    if not keys:
+        return []
+    by_key: dict[str, list[tuple[int, str]]] = {}
+    for key, word, ndoc in lookup(sorted(keys)):
+        if word not in own:
+            by_key.setdefault(key, []).append((ndoc, word))
+    return [w for k in sorted(by_key)
+            for _, w in sorted(by_key[k], reverse=True)[:per_key]]

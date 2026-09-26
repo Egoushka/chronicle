@@ -494,8 +494,27 @@ def cmd_embed(args) -> int:
     with conn.cursor() as cur:
         cur.execute("SELECT refresh_lexeme_df()")
         log.info("lexeme_df refreshed over %d segments", cur.fetchone()[0])
+        _key_lexemes(cur)
     conn.commit()
     return 0
+
+
+def _key_lexemes(cur) -> None:
+    """Write each lexeme's cross-script key (rank.spelling_variants reads it).
+
+    Python, not SQL: resolve.translit_key is the one implementation of the
+    key, and a SQL copy would drift from it. ~130k words, one COPY + UPDATE.
+    """
+    from .resolve import translit_key
+    cur.execute("SELECT word FROM lexeme_df")
+    rows = [(w, translit_key(w)) for (w,) in cur.fetchall()]
+    cur.execute("CREATE TEMP TABLE lexeme_key (word TEXT, pkey TEXT) ON COMMIT DROP")
+    with cur.copy("COPY lexeme_key (word, pkey) FROM STDIN") as cp:
+        for row in rows:
+            cp.write_row(row)
+    cur.execute("""UPDATE lexeme_df d SET pkey = k.pkey
+                     FROM lexeme_key k WHERE k.word = d.word""")
+    log.info("lexeme keys written for %d words", cur.rowcount)
 
 
 # ---------------------------------------------------------------------------

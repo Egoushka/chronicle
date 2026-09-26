@@ -78,3 +78,34 @@ def test_window_refuses_to_guess():
     assert window("Коли я кинув курити?") is None
     assert window("як змінилась зарплата між 2019 і 2022") is None
     assert window("мій номер 12020 і код 2024") == (_d(2023, 11), _d(2025, 2))
+
+
+
+# --------------------------------------------------------------------------
+#  spelling_variants — the archive's other spellings of a question's terms
+# --------------------------------------------------------------------------
+
+def _archive(words):
+    """A lookup over a fake lexeme_df: {word: ndoc}."""
+    from chronicle.resolve import translit_key
+    rows = [(translit_key(w), w, n) for w, n in words.items()]
+    return lambda keys: [r for r in rows if r[0] in keys]
+
+
+def test_variants_cross_script_and_ru_uk():
+    from chronicle.rank import spelling_variants
+    lookup = _archive({"epam": 12, "епам": 21, "одес": 61, "одесс": 337,
+                       "одесі": 44, "квартир": 900})
+    got = spelling_variants(["epam", "одес"], lookup)
+    assert "епам" in got and "одесс" in got
+    assert "epam" not in got and "одес" not in got, "the question's own terms are not variants"
+    assert "квартир" not in got
+
+
+def test_variants_skip_short_keys_and_cap_per_key():
+    from chronicle.rank import spelling_variants
+    lookup = _archive({"як": 5000, "ак": 10, "aa": 1,
+                       "одесс": 337, "одесі": 44, "одеса": 30, "одесу": 20})
+    assert spelling_variants(["як"], lookup) == [], "2-letter keys collide with everything"
+    got = spelling_variants(["одес"], lookup, per_key=2)
+    assert got == ["одесс", "одесі"], "most frequent spellings first, capped"
