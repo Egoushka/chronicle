@@ -42,12 +42,27 @@ class ImmichAdapter(SqlAdapter):
                    COALESCE(e."dateTimeOriginal", a."fileCreatedAt") AS taken_at,
                    a.type, a."originalFileName",
                    e.latitude, e.longitude, e.city, e.country, e.model
-            FROM assets a
-            LEFT JOIN exif e ON e."assetId" = a.id
+            -- immich v2 renamed the tables to the singular: `assets` ->
+            -- `asset`, `exif` -> `asset_exif` (doctor, 2026-09-26: relation
+            -- "assets" does not exist, on immich-server:v2). Columns kept
+            -- their names.
+            FROM asset a
+            LEFT JOIN asset_exif e ON e."assetId" = a.id
             WHERE a."deletedAt" IS NULL
-              AND (%(owner)s IS NULL OR a."ownerId"::text = %(owner)s)
-              AND (%(since)s IS NULL OR COALESCE(e."dateTimeOriginal", a."fileCreatedAt") > %(since)s)
-              AND (%(until)s IS NULL OR COALESCE(e."dateTimeOriginal", a."fileCreatedAt") <= %(until)s)
+              -- `hidden` is the video half of a live photo, which would
+              -- double-count the moment; `locked` is the Locked Folder,
+              -- which Yehor hid from immich's own timeline on purpose.
+              AND a.visibility::text NOT IN ('hidden', 'locked')
+              -- Cast every nullable bound (hard-won fact 16): a bare
+              -- placeholder in `IS NULL` is planned as `unknown` and the next
+              -- call with a real value dies on a parameter type mismatch.
+              -- (No placeholder syntax in these comments: psycopg parses
+              -- them too, and one here failed with "parameter missing".)
+              AND (%(owner)s::text IS NULL OR a."ownerId"::text = %(owner)s::text)
+              AND (%(since)s::timestamptz IS NULL
+                   OR COALESCE(e."dateTimeOriginal", a."fileCreatedAt") > %(since)s::timestamptz)
+              AND (%(until)s::timestamptz IS NULL
+                   OR COALESCE(e."dateTimeOriginal", a."fileCreatedAt") <= %(until)s::timestamptz)
             ORDER BY taken_at
         """
         params = {"owner": self.owner_id, "since": since, "until": until}

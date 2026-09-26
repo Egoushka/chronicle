@@ -29,7 +29,7 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -272,8 +272,15 @@ class ApiAdapter(Adapter):
 
     def _windows(self, since: datetime | None,
                  until: datetime | None) -> Iterator[tuple[datetime, datetime]]:
-        start = since or datetime(2018, 12, 1, tzinfo=None)
-        end = until or datetime.now()
+        # Aware UTC throughout. The worker hands back `source.last_ingested_at`,
+        # a timestamptz, so `since` arrives AWARE; the old naive defaults made
+        # `start < end` raise "can't compare offset-naive and offset-aware
+        # datetimes" on the second run of every API adapter, i.e. the first
+        # one that resumed. Naive input is taken as UTC, as everywhere else.
+        def utc(dt: datetime) -> datetime:
+            return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+        start = utc(since) if since else datetime(2018, 12, 1, tzinfo=timezone.utc)
+        end = utc(until) if until else datetime.now(timezone.utc)
         while start < end:
             stop = min(start + self.page_window, end)
             yield start, stop
@@ -332,7 +339,10 @@ def coerce_ts(value: Any) -> datetime | None:
         return value
     if isinstance(value, (int, float)):
         # Heuristic: anything past ~2001 in seconds is <1e10; millis are >1e11.
-        return datetime.fromtimestamp(value / 1000 if value > 1e11 else value)
+        # UTC, explicitly: fromtimestamp() without tz is the PROCESS's local
+        # time, i.e. correct only by the accident of a UTC container.
+        return datetime.fromtimestamp(value / 1000 if value > 1e11 else value,
+                                      timezone.utc)
     if isinstance(value, str):
         txt = value.strip().replace("Z", "+00:00")
         try:

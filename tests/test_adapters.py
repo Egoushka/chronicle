@@ -98,8 +98,9 @@ def test_wakapi_rolls_heartbeats_into_sessions(wakapi_db):
 def test_sqlite_bounds_match_their_own_source_format():
     """Two SQLite sources, two incompatible TEXT layouts. Do not unify them.
 
-    wakapi stores '2026-03-01 09:00:00+00:00' (space); telegram stores
-    '2026-03-01T09:00:00+00:00' (T). ' ' is 0x20 and 'T' is 0x54, so using
+    wakapi stores '2026-03-01 09:00:00+00:00' (space); telegram's resume
+    column, synced_at, stores '2026-03-01T09:00:00.000000+00:00' (T, and a
+    fraction). ' ' is 0x20 and 'T' is 0x54, so using
     one source's bound on the other makes `since` compare against every row
     the wrong way and resume silently re-reads or skips the archive.
     """
@@ -107,11 +108,38 @@ def test_sqlite_bounds_match_their_own_source_format():
     from chronicle.adapters.wakapi import _bound as wk_bound
 
     when = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
-    assert wk_bound(when) == "2026-03-01 09:00:00+00:00"
-    assert tg_bound(when) == "2026-03-01T09:00:00+00:00"
-    assert wk_bound(None) is None and tg_bound(None) is None
+    assert wk_bound(when) == ("2026-03-01 09:00:00+00:00", 1772355600000)
+    assert tg_bound(when) == "2026-03-01T09:00:00.000000+00:00"
+    assert wk_bound(None) == (None, None) and tg_bound(None) is None
     # naive input is UTC, not local — the archive spans 7.6 years of DST
     assert wk_bound(datetime(2026, 3, 1, 9, 0)) == wk_bound(when)
+
+
+def test_wakapi_resumes_over_integer_millisecond_heartbeats(tmp_path):
+    """wakapi 2.18 stores `time` as INTEGER epoch millis, not TEXT.
+
+    SQLite orders every integer below every text value, so a TEXT bound made
+    `time > :since` false for all 18,903 live rows: ingest sat at its June
+    watermark for three months while heartbeats kept arriving.
+    """
+    db = tmp_path / "wakapi.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE heartbeats (user_id TEXT, time TIMESTAMP, "
+                 "project TEXT, language TEXT, entity TEXT, branch TEXT)")
+    base = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    conn.executemany("INSERT INTO heartbeats VALUES (?,?,?,?,?,?)", [
+        ("yehor", int((base + timedelta(hours=h, minutes=2 * i)).timestamp() * 1000),
+         "chronicle", "Python", "worker.py", "main")
+        for h in (0, 3) for i in range(10)])
+    conn.commit()
+    conn.close()
+
+    ad = WakapiAdapter(str(db), user="yehor")
+    assert len(list(ad.fetch())) == 2
+    resumed = list(ad.fetch(since=base + timedelta(hours=1)))
+    assert [e.ts for e in resumed] == [base + timedelta(hours=3)], \
+        "an integer-stored heartbeat compared against a TEXT bound"
+    assert resumed[0].ts.tzinfo is not None, "epoch ints must decode as UTC"
 
 
 def test_wakapi_is_telemetry_so_it_is_not_segmented(wakapi_db):
@@ -173,8 +201,10 @@ def telegram_db(tmp_path) -> str:
     for chat in (111, 222, 333, 444, 555):
         for i in range(10):
             ts = (base + timedelta(minutes=i)).isoformat()
+            # synced_at in its live shape: always a fraction (see _bound).
+            synced = (base + timedelta(minutes=i)).isoformat(timespec="microseconds")
             rows.append((i, chat, f"chat{chat}", "user", 1, "Yehor",
-                         f"msg {i}", ts, i % 2, None, ts, None))
+                         f"msg {i}", ts, i % 2, None, synced, None))
     conn.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     conn.commit()
     conn.close()
@@ -190,13 +220,17 @@ def test_telegram_is_sqlite_not_postgres():
 
 def test_telegram_bound_matches_the_stored_text_format():
     got = _bound(datetime(2026, 3, 1, 9, 0))
-    assert got == "2026-03-01T09:00:00+00:00"
+    assert got == "2026-03-01T09:00:00.000000+00:00"
     # sqlite3's own adapter would render '2026-03-01 09:00:00'. ' ' < 'T', so
     # that bound sorts before every stored row and `since` stops filtering.
     assert "T" in got and got.endswith("+00:00")
+    # And isoformat() alone drops the fraction at microsecond 0, which puts
+    # '+' against a stored '.': a whole second of rows on the wrong side.
+    assert len(got) == len("2026-03-01T09:00:00.123456+00:00")
 
 
-def test_telegram_since_filter_actually_filters(telegram_db):
+def test_telegram_since_filter_actually_filters(telegram_db, monkeypatch):
+    monkeypatch.setattr("chronicle.adapters.telegram.SYNC_LAG", timedelta(0))
     ad = TelegramAdapter(telegram_db, exclude_bot_chats=False)
     everything = list(ad.fetch())
     assert len(everything) == 50
@@ -205,8 +239,45 @@ def test_telegram_since_filter_actually_filters(telegram_db):
     assert list(ad.fetch(since=high)) == [], \
         "resume re-read the archive — the TEXT bound is not comparing"
 
-    midpoint = everything[len(everything) // 2].ts
+    midpoint = sorted(e.watermark_ts for e in everything)[25]
     assert 0 < len(list(ad.fetch(since=midpoint))) < 50
+
+
+def test_telegram_resume_overlaps_by_sync_lag(telegram_db):
+    """A row stamped before the watermark but committed after it is re-read.
+
+    telegram-sync stamps synced_at before its batch commits, so a strict
+    `> watermark` can skip a row forever. Re-reading costs nothing: the
+    worker's upsert is a no-op when the text is unchanged.
+    """
+    from chronicle.adapters.telegram import SYNC_LAG
+    ad = TelegramAdapter(telegram_db, exclude_bot_chats=False)
+    high = max(e.watermark_ts for e in ad.fetch())
+    assert list(ad.fetch(since=high)), "no overlap: a late-committing row is lost"
+    assert list(ad.fetch(since=high + SYNC_LAG)) == []
+
+
+def test_telegram_resumes_on_write_time_not_message_date(telegram_db):
+    """A transcript landing on an OLD voice note must be picked up.
+
+    telegram-sync's upsert rewrites `text` and `synced_at` together. Resuming
+    on the message date skipped every such row: 4,544 voice notes were
+    transcribed after the first ingest and none ever reached chronicle.
+    """
+    ad = TelegramAdapter(telegram_db, exclude_bot_chats=False)
+    high = max(e.watermark_ts for e in ad.fetch())
+
+    later = (high + timedelta(days=30)).isoformat(timespec="microseconds")
+    conn = sqlite3.connect(telegram_db)
+    conn.execute("UPDATE messages SET text = '[voice] привіт', synced_at = ?, "
+                 "media_type = 'voice' WHERE chat_id = 111 AND id = 0", (later,))
+    conn.commit()
+    conn.close()
+
+    changed = list(ad.fetch(since=high + timedelta(days=1)))
+    assert [(e.source_id, e.text) for e in changed] == [("111:0", "[voice] привіт")]
+    assert changed[0].ts < high, "ts must stay the message date"
+    assert changed[0].watermark_ts > high, "the watermark must be the write time"
 
 
 def test_telegram_timestamps_are_datetimes_not_text(telegram_db):
@@ -563,11 +634,11 @@ def test_substantive_filter_is_narrative_only():
     row = ("wakapi", "p:1", datetime(2026, 6, 1), "me",
            "coded on chronicle for 48 min (Python)", None, None, None, None)
     assert _substantive([row]) is False, "heuristic itself is unchanged"
-    # ...which is why worker.cmd_segment only applies it when density=narrative.
-    import inspect
-    from chronicle import worker
-    src = inspect.getsource(worker.cmd_segment)
-    assert 'density == "narrative" else True' in src
+    # ...which is why the worker only applies it when density=narrative.
+    from chronicle.worker import _segment_fields
+    substantive = 7          # index in the insert tuple
+    assert _segment_fields([row], "wakapi:p", "telemetry")[substantive] is True
+    assert _segment_fields([row], "wakapi:p", "narrative")[substantive] is False
 
 
 def test_dawarich_eps_is_the_dbscan_radius_not_a_plural_of_segment():
@@ -687,3 +758,77 @@ def test_every_adapter_answers_excluded_thread_keys():
     for name, cls in ADAPTERS.items():
         assert hasattr(cls, "excluded_thread_keys"), name
     assert Adapter.excluded_thread_keys(object()) == set()
+
+
+# --------------------------------------------------------------------------
+#  API adapters
+# --------------------------------------------------------------------------
+
+def test_api_windows_resume_from_an_aware_watermark():
+    """`source.last_ingested_at` is timestamptz, so the SECOND run hands the
+    adapter an aware `since`. Naive defaults made `start < end` raise, i.e.
+    every API adapter failed the first time it resumed."""
+    from chronicle.adapters.api_sources import LastfmAdapter
+    ad = LastfmAdapter(fetch_page=lambda **kw: [])
+    since = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    spans = list(ad._windows(since, datetime(2026, 12, 15)))    # naive until: UTC
+    assert spans[0][0] == since and spans[-1][1].tzinfo is not None
+    assert list(ad.fetch(since=since)) == []
+
+
+def test_lastfm_pages_walks_pages_and_skips_now_playing():
+    from chronicle.adapters.api_sources import LastfmAdapter, lastfm_pages
+
+    def track(uts, artist):
+        return {"artist": {"#text": artist}, "name": "t", "date": {"uts": str(uts)}}
+
+    base = int(datetime(2026, 9, 1, 20, tzinfo=timezone.utc).timestamp())
+    pages = {1: [{"artist": {"#text": "now"}, "name": "playing"},      # no date
+                 track(base, "Okean Elzy"), track(base + 200, "Okean Elzy")],
+             2: [track(base + 400, "DakhaBrakha")]}
+    seen = []
+
+    class Http:
+        def get(self, url, params):
+            seen.append(params)
+            body = {"recenttracks": {"track": pages[params["page"]],
+                                     "@attr": {"totalPages": "2"}}}
+            return type("R", (), {"raise_for_status": lambda s: None,
+                                  "json": lambda s: body})()
+
+    fetch = lastfm_pages("k", "u", http=Http())
+    got = fetch(start=datetime(2026, 9, 1, tzinfo=timezone.utc),
+                stop=datetime(2026, 9, 2, tzinfo=timezone.utc))
+    assert [p["page"] for p in seen] == [1, 2]
+    assert [t["artist"] for t in got] == ["Okean Elzy", "Okean Elzy", "DakhaBrakha"]
+    assert all(t["played_at"].tzinfo is not None for t in got)
+
+    # ...and the three scrobbles roll up into one listening session.
+    [session] = LastfmAdapter(fetch_page=lambda **kw: got)._rollup(got)
+    assert session.payload["tracks"] == 3 and session.payload["top_artist"] == "Okean Elzy"
+    assert session.watermark_ts > session.ts, "rollups resume from the span END"
+
+
+def test_karakeep_resumes_in_seconds_and_reads_text_bookmarks(tmp_path):
+    """karakeep stores createdAt in epoch SECONDS; the bound was millis, so a
+    resume matched nothing. And a text bookmark's body lives only in
+    bookmarkTexts — 19 of 28 live bookmarks were being indexed as ''."""
+    from chronicle.adapters.karakeep import KarakeepAdapter
+    db = tmp_path / "db.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE bookmarks (id TEXT, createdAt INTEGER, title TEXT, "
+                 "note TEXT, type TEXT)")
+    conn.execute("CREATE TABLE bookmarkLinks (id TEXT, url TEXT, title TEXT, description TEXT)")
+    conn.execute("CREATE TABLE bookmarkTexts (id TEXT, text TEXT, sourceUrl TEXT)")
+    base = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    conn.executemany("INSERT INTO bookmarks VALUES (?,?,?,?,?)", [
+        ("a", int(base.timestamp()), None, None, "link"),
+        ("b", int((base + timedelta(days=2)).timestamp()), None, None, "text")])
+    conn.execute("INSERT INTO bookmarkLinks VALUES ('a', 'https://x', 'A page', NULL)")
+    conn.execute("INSERT INTO bookmarkTexts VALUES ('b', 'idea: segment by reply chains', NULL)")
+    conn.commit()
+    conn.close()
+
+    ad = KarakeepAdapter(str(db))
+    assert [e.text for e in ad.fetch()] == ["A page", "idea: segment by reply chains"]
+    assert [e.source_id for e in ad.fetch(since=base + timedelta(days=1))] == ["b"]

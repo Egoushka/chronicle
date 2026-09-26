@@ -84,6 +84,49 @@ class LastfmAdapter(ApiAdapter):
             yield ev
 
 
+def lastfm_pages(api_key: str, user: str, http=None):
+    """`fetch_page` for LastfmAdapter over the public REST API.
+
+    A closure, so the key stays in doctor.build and never on the adapter.
+    Last.fm is the one API source that needs no MCP wiring: a read key and a
+    username, both already on the box for the Hindsight weekly music log.
+
+    `user.getRecentTracks` with from/to is inclusive and paged at 200; the
+    currently-playing track has no `date` and is skipped — it is not a scrobble
+    yet, and the next run picks it up once it is.
+    """
+    import time
+
+    if http is None:
+        import httpx
+        http = httpx.Client(timeout=30)
+    client = http
+
+    def fetch_page(start: datetime, stop: datetime) -> list[dict]:
+        tracks, page, pages = [], 1, 1
+        while page <= pages:
+            r = client.get("https://ws.audioscrobbler.com/2.0/", params={
+                "method": "user.getrecenttracks", "user": user, "api_key": api_key,
+                "format": "json", "limit": 200, "page": page,
+                "from": int(start.timestamp()), "to": int(stop.timestamp())})
+            r.raise_for_status()
+            body = r.json()["recenttracks"]
+            pages = int(body.get("@attr", {}).get("totalPages") or 0)
+            items = body.get("track") or []
+            for t in items if isinstance(items, list) else [items]:
+                if "date" not in t:
+                    continue
+                tracks.append({
+                    "played_at": datetime.fromtimestamp(int(t["date"]["uts"]), timezone.utc),
+                    "artist": (t.get("artist") or {}).get("#text"),
+                    "track": t.get("name")})
+            page += 1
+            time.sleep(0.25)      # Last.fm asks for <5 req/s per key
+        return tracks
+
+    return fetch_page
+
+
 @register
 class CalendarAdapter(ApiAdapter):
     """Google Calendar — the structure of time.
