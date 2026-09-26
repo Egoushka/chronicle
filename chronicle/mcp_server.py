@@ -15,22 +15,18 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
 
 import httpx
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 log = logging.getLogger(__name__)
 API = os.environ.get("CHRONICLE_API_URL", "http://chronicle-api:8030")
 
-# host/port belong on the constructor, not on run(): FastMCP.run() takes only
-# (transport, mount_path). Passing them to run() crash-looped the container
-# with `TypeError: FastMCP.run() got an unexpected keyword argument 'host'`.
-# The default host is 127.0.0.1, which inside a container means nothing
-# outside it can connect — so 0.0.0.0 here is what makes the published
-# 127.0.0.1:8031 mapping reach anything. Exposure is bounded by that port
-# binding and by `edge`, not by this.
-mcp = FastMCP("chronicle", host="0.0.0.0", port=8031)
+# mcp 2.x renamed FastMCP to MCPServer and moved host/port the OTHER way:
+# 1.x took them on the constructor and run() rejected them; 2.x's constructor
+# has no host/port at all and run("sse", host=..., port=...) takes them
+# (mcp/server/mcpserver/server.py, the run() overloads). See __main__ below.
+mcp = MCPServer("chronicle")
 _client = httpx.AsyncClient(base_url=API, timeout=120.0)
 
 
@@ -154,4 +150,11 @@ async def ground(claim: str, limit: int = 10) -> str:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    mcp.run(transport="sse")
+    # The default host is 127.0.0.1, which inside a container means nothing
+    # outside it can connect — so 0.0.0.0 here is what makes the published
+    # 127.0.0.1:8031 mapping reach anything. Exposure is bounded by that port
+    # binding and by `edge`, not by this. Binding 127.0.0.1 would also switch
+    # on the SDK's DNS-rebinding guard, which rejects any Host but localhost.
+    # SSE still serves /sse + /messages/ in 2.x, so the compose healthcheck
+    # and every client config stay as they were.
+    mcp.run("sse", host="0.0.0.0", port=8031)
