@@ -15,12 +15,6 @@ CREATE TABLE IF NOT EXISTS lexeme_df (
     word  TEXT PRIMARY KEY,
     ndoc  INT  NOT NULL
 );
--- Coarse cross-script key of each lexeme (resolve.translit_key), written by
--- the worker after each refresh. It lets a question's `epam` find the chats'
--- `епам`, and Ukrainian `одес` find Russian `одесс` (61 vs 337 segments).
-ALTER TABLE lexeme_df ADD COLUMN IF NOT EXISTS pkey TEXT;
-CREATE INDEX IF NOT EXISTS lexeme_df_pkey_idx ON lexeme_df (pkey);
-
 CREATE TABLE IF NOT EXISTS lexeme_df_meta (
     singleton    BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     ndocs        INT NOT NULL,
@@ -67,12 +61,13 @@ $$ LANGUAGE plpgsql;
 -- The dense branch is a brute-force scan either way (there is deliberately no
 -- ANN index — see ADR-001) and costs ~180 ms, so it is the lexical half that
 -- has to reach its index.
--- `extra_lexemes` joined the signature 2026-09-26. Adding a parameter with
--- CREATE OR REPLACE makes a SECOND overload, and every call relying on the
--- defaults then fails with "function hybrid_search(...) is not unique" — so
--- the old signature is dropped by name first.
+-- A 10-argument hybrid_search(..., extra_lexemes TEXT[]) was live for an
+-- hour on 2026-09-26 (spelling variants — measured no gain at 4x latency,
+-- reverted). CREATE OR REPLACE of THIS signature would leave it standing as
+-- a second overload and make every defaulted call ambiguous; drop it first.
 DROP FUNCTION IF EXISTS hybrid_search(halfvec, TEXT, TIMESTAMPTZ, TIMESTAMPTZ,
-                                      TEXT[], TEXT[], INT, INT, INT);
+                                      TEXT[], TEXT[], INT, INT, INT, TEXT[]);
+ALTER TABLE lexeme_df DROP COLUMN IF EXISTS pkey;
 CREATE OR REPLACE FUNCTION hybrid_search(
     q_embedding  halfvec(1024),
     q_text       TEXT,
@@ -82,11 +77,7 @@ CREATE OR REPLACE FUNCTION hybrid_search(
     source_filter TEXT[]     DEFAULT NULL,
     n_candidates INT         DEFAULT 100,
     n_final      INT         DEFAULT 20,
-    rrf_k        INT         DEFAULT 60,
-    -- Lexemes added verbatim, NOT through to_tsvector(): they are already
-    -- stems (the archive's other spellings of the question's terms), and
-    -- re-stemming is not idempotent — 'епам' comes back as 'еп'.
-    extra_lexemes TEXT[]     DEFAULT NULL
+    rrf_k        INT         DEFAULT 60
 )
 RETURNS TABLE (segment_id BIGINT, rrf_score DOUBLE PRECISION,
                dense_rank INT, lex_rank INT) AS $$
@@ -113,9 +104,7 @@ WITH dense AS (
 -- measurement rather than by list.
 kept AS (
     SELECT d.word, ln(m.ndocs::float / d.ndoc) AS idf
-    FROM (SELECT unnest(tsvector_to_array(to_tsvector('ru_unaccent', q_text)))
-          UNION
-          SELECT unnest(coalesce(extra_lexemes, '{}'))) AS w(word)
+    FROM unnest(tsvector_to_array(to_tsvector('ru_unaccent', q_text))) AS w(word)
     JOIN lexeme_df d USING (word)
     CROSS JOIN lexeme_df_meta m
     WHERE d.ndoc < 0.05 * m.ndocs

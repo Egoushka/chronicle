@@ -68,18 +68,6 @@ BEGIN
   IF n <> 3 THEN RAISE EXCEPTION 'IDF lexical branch found % of 3 rare segments', n; END IF;
 END $$;
 SELECT 'idf lexical: 3 of 3 rare segments found';
--- A variant passed as an exact lexeme must reach segments the question's own
--- spelling cannot ('роутер' is spelled only in Latin in the question here).
-DO $$
-DECLARE n int;
-BEGIN
-  SELECT count(*) INTO n FROM hybrid_search(
-      (SELECT embedding FROM segment LIMIT 1), 'router purchase',
-      NULL, NULL, NULL, NULL, 100, 50, extra_lexemes => ARRAY['роутер'])
-   WHERE lex_rank IS NOT NULL;
-  IF n <> 3 THEN RAISE EXCEPTION 'extra_lexemes reached % of 3 segments', n; END IF;
-END $$;
-SELECT 'extra_lexemes: 3 of 3 reached';
 SELECT 'hybrid_search rows: ' || count(*) FROM hybrid_search(
     (SELECT embedding FROM segment LIMIT 1), 'квартира ипотека',
     NULL, NULL, NULL, NULL, 100, 20);
