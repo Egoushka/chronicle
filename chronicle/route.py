@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 INTENT_PATTERNS: dict[str, list[str]] = {
     "aggregate": [
@@ -74,3 +75,53 @@ def route(query: str) -> Intent:
                   apply_recency_decay=present_tense and not has_anchor)
 
 
+
+
+# Month stems, January first. Stems, not words: "в січні", "у листопаді",
+# "в ноябре", "November" all have to land on the same month.
+_MONTHS = ["січн|январ|january", "лют|феврал|february", "березн|март|march",
+           "квітн|апрел|april", "травн|ма[йя]|may", "червн|июн|june",
+           "липн|июл|july", "серпн|август|august", "вересн|сентябр|september",
+           "жовтн|октябр|october", "листопад|ноябр|november",
+           "грудн|декабр|december"]
+_SEASONS = [(r"(влітку|літ[оа]м?|лет[оа]м?|summer)", 6, 8),
+            (r"(восени|осін|осен|autumn|\bfall\b)", 9, 11),
+            (r"(взимку|зим|winter)", 12, 2),
+            (r"(навесні|весн|spring)", 3, 5)]
+
+
+def _utc(y: int, m: int) -> datetime:
+    y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
+    return datetime(y, m, 1, tzinfo=timezone.utc)
+
+
+def window(query: str) -> tuple[datetime, datetime] | None:
+    """The date range a question names, with margins — or None.
+
+    Most lookups carry their own anchor ("наприкінці 2024", "влітку 2025",
+    "в січні 2026"), and /recall ignored it: 3 of the 11 lookups that missed
+    the top 20 in the first eval land inside it once the search is confined to
+    the year the question names (2026-09-26, 17 -> 20 of 28).
+
+    Only an unambiguous single year counts; two different years ("between
+    2019 and 2022") return None rather than guess. Margins are deliberately
+    generous — people misplace events by a month or two, and a window that
+    excludes the answer is worse than no window:
+        year        Nov of the year before .. Jan of the year after
+        season      one month either side
+        month       one month either side
+    """
+    q = query.lower()
+    years = set(re.findall(r"\b(20[0-4]\d|19[89]\d)\b", q))
+    if len(years) != 1:
+        return None
+    y = int(years.pop())
+    for i, stems in enumerate(_MONTHS):
+        if re.search(rf"\b({stems})", q):
+            return _utc(y, i), _utc(y, i + 3)          # month-1 .. month+1
+    for pattern, first, last in _SEASONS:
+        if re.search(pattern, q):
+            if first > last:                            # winter spans the year
+                return _utc(y, 11 - 12), _utc(y, last + 2)
+            return _utc(y, first - 1), _utc(y, last + 2)
+    return _utc(y - 1, 11), _utc(y + 1, 2)

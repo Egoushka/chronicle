@@ -488,6 +488,13 @@ def cmd_embed(args) -> int:
         done += len(rows)
         log.info("embedded %d", done)
 
+    # The lexical branch weights terms by IDF over lemmatized_text, which this
+    # stage writes, so the statistics follow it. ~7 s over 39k segments, run
+    # even when nothing was embedded: segment/ingest can change is_substantive.
+    with conn.cursor() as cur:
+        cur.execute("SELECT refresh_lexeme_df()")
+        log.info("lexeme_df refreshed over %d segments", cur.fetchone()[0])
+    conn.commit()
     return 0
 
 

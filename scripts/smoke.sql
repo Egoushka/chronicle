@@ -41,7 +41,33 @@ SELECT 'c1', '{telegram}',
 FROM generate_series(1, 1200) g;
 SELECT 'segments: ' || count(*) FROM segment;
 
+-- Three segments about a rare subject, for the IDF lexical branch.
+INSERT INTO segment(thread_key, sources, started_at, ended_at, event_count,
+                    source_event_ids, raw_text, embed_text, lemmatized_text,
+                    is_substantive, embedding, segmenter_version)
+SELECT 'c2', '{telegram}', timestamptz '2025-03-01' + g * interval '1 day',
+       timestamptz '2025-03-01' + g * interval '1 day' + interval '10 min', 3,
+       ARRAY['c2:'||g], 'me: купил роутер mikrotik', 'купил роутер mikrotik hap',
+       'купить роутер mikrotik hap', TRUE,
+       (SELECT array_agg(random())::halfvec(1024) FROM generate_series(1,1024)),
+       'seg-2026.07-timegap-v1'
+FROM generate_series(1, 3) g;
+
 -- hybrid search
+-- IDF lexical branch: needs lexeme_df; before a refresh it is empty and
+-- search is dense-only, which must not error either.
+SELECT 'lexeme_df refreshed over: ' || refresh_lexeme_df();
+-- A natural-language question: the old plainto_tsquery ANDed every word and
+-- matched none of these; the IDF branch must find all three.
+DO $$
+DECLARE n int;
+BEGIN
+  SELECT count(*) INTO n FROM hybrid_search(
+      (SELECT embedding FROM segment LIMIT 1), 'когда я купил роутер mikrotik домой?',
+      NULL, NULL, NULL, NULL, 100, 50) WHERE lex_rank IS NOT NULL;
+  IF n <> 3 THEN RAISE EXCEPTION 'IDF lexical branch found % of 3 rare segments', n; END IF;
+END $$;
+SELECT 'idf lexical: 3 of 3 rare segments found';
 SELECT 'hybrid_search rows: ' || count(*) FROM hybrid_search(
     (SELECT embedding FROM segment LIMIT 1), 'квартира ипотека',
     NULL, NULL, NULL, NULL, 100, 20);

@@ -40,3 +40,41 @@ def test_recency_decay_fires_only_on_present_tense():
 def test_every_route_is_logged_and_overridable():
     intent = route("Сколько раз я писал Ане?")
     assert intent.kind and hasattr(intent, "matched_pattern")
+
+
+# --------------------------------------------------------------------------
+#  window — the date range a question names
+# --------------------------------------------------------------------------
+
+def _d(y, m):
+    from datetime import datetime, timezone
+    return datetime(y, m, 1, tzinfo=timezone.utc)
+
+
+def test_window_year_has_a_margin_both_sides():
+    from chronicle.route import window
+    assert window("Як я пішов з роботи восени 2024?") == (_d(2024, 8), _d(2025, 1))
+    assert window("what happened in 2021 with the car") == (_d(2020, 11), _d(2022, 2))
+
+
+def test_window_month_and_season_in_three_languages():
+    from chronicle.route import window
+    assert window("Що сталося з раковиною в січні 2026?") == (_d(2025, 12), _d(2026, 3))
+    assert window("что было в ноябре 2024") == (_d(2024, 10), _d(2025, 1))
+    assert window("Чому влітку 2025 поїхав з Києва?") == (_d(2025, 5), _d(2025, 10))
+    assert window("rejected after the tech interview in November 2024") \
+        == (_d(2024, 10), _d(2025, 1))
+
+
+def test_window_winter_spans_the_new_year():
+    from chronicle.route import window
+    assert window("взимку 2023 я хворів") == (_d(2022, 11), _d(2023, 4))
+
+
+def test_window_refuses_to_guess():
+    """No year, or two different years: no window. A window that excludes the
+    answer is worse than none."""
+    from chronicle.route import window
+    assert window("Коли я кинув курити?") is None
+    assert window("як змінилась зарплата між 2019 і 2022") is None
+    assert window("мій номер 12020 і код 2024") == (_d(2023, 11), _d(2025, 2))

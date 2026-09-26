@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from .embed import Embedder, Lemmatizer
 from .rank import reciprocal_rank_fusion  # noqa: F401  (used by SQL-side RRF parity tests)
-from .route import route
+from .route import route, window
 
 log = logging.getLogger(__name__)
 DB_URL = os.environ.get("CHRONICLE_DB_URL", "")
@@ -150,6 +150,12 @@ class RecallReq(BaseModel):
 @app.post("/recall")
 def recall(req: RecallReq):
     intent = route(req.query)
+    # A date the question names confines the search, unless the caller set
+    # one. Dense retrieval is one query against 39k segments; the year it asks
+    # about is the cheapest discriminator there is.
+    named = window(req.query) if req.date_from is None and req.date_to is None else None
+    if named:
+        req.date_from, req.date_to = named
     vec = _state["embedder"].encode_one(req.query).tolist()
     rows = q("""SELECT h.segment_id, h.rrf_score, e.started_at, e.thread_key,
                        e.raw_text, e.source_event_ids, e.summary
@@ -161,6 +167,7 @@ def recall(req: RecallReq):
     return {
         "intent": intent.kind,
         "routed_because": intent.matched_pattern,
+        "window_from_query": [d.isoformat() for d in named] if named else None,
         "results": [{"segment_id": r[0], "score": float(r[1]),
                      "date": r[2].isoformat(), "thread": r[3],
                      "text": r[4][:2000], "evidence": r[5], "summary": r[6]}
