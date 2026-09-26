@@ -24,6 +24,20 @@ services:
       # avg 74.79 vs mE5-large 74.04, MIRACL-ru 70.16 vs 67.33.
       EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-m3}
       EMBED_DIM: "1024"
+      # The api encodes ONE query per request, so it runs BAAI's own fp32 ONNX
+      # export of the same weights instead of FlagEmbedding/torch. Measured on
+      # this box 2026-09-26 (docs/ADR-003), same process, same inputs:
+      #
+      #                  steady RSS   peak      query     top-20 vs torch
+      #   torch fp16     3,979 MB     4,430 MB  0.246 s   —
+      #   onnx fp32      1,723 MB     1,723 MB  0.052 s   40/40 identical
+      #   onnx int8      1,147 MB     1,147 MB  0.023 s   0/40 identical, top-1 moved on 12.5%
+      #
+      # int8 was rejected: cos 0.985 to the stored vectors is enough to reorder
+      # every result list, and with no labelled eval there is no way to show
+      # that reordering is not a regression. The worker stays on torch (it
+      # wrote every stored vector) — do not switch it without re-embedding.
+      EMBED_BACKEND: onnx
       # torch defaults to one thread per core. On 16 cores that OVERSUBSCRIBES
       # a box already running ~107 other services, and the threads spend more
       # time contending than computing. Measured, one short query through
@@ -60,13 +74,18 @@ services:
     # anon-rss:2067848kB`, i.e. exactly at the 2g cap, CONSTRAINT_MEMCG. The
     # model LOADS in well under 2g; it is the first encode() that allocates.
     # chronicle-worker peaked at 3.885 GiB doing the same encode with an 8g
-    # cap, so 5g is that plus headroom.
+    # cap, so 5g was that plus headroom.
+    #
+    # That was torch. With EMBED_BACKEND=onnx the encoder peaks at 1,723 MB on
+    # 1024-token inputs (the max_length truncation caps it; a query is far
+    # shorter), plus pymorphy3 and the pool. 2560m is that peak plus ~50%.
+    # Re-measure before lowering it: the failure mode above is silent.
     #
     # memswap_limit == mem_limit deliberately, per the estate convention: a
     # cgroup at its cap is OOM-killed rather than swapped, on a box that has
     # already hit 96% swap.
-    mem_limit: 5g
-    memswap_limit: 5g
+    mem_limit: 2560m
+    memswap_limit: 2560m
     security_opt: [no-new-privileges:true]
 
     healthcheck:
@@ -74,7 +93,8 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      # BGE-M3 loads from the volume on boot; cold start is genuinely slow.
+      # The model loads lazily on the first query, not on boot, so this no
+      # longer has to cover a model load; kept generous anyway.
       start_period: 180s
     labels:
       - autoheal=true
