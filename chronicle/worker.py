@@ -66,8 +66,8 @@ def cmd_ingest(args) -> int:
     """Pull every configured source into `event`.
 
     Resume point is `source.last_ingested_at`, advanced only after a batch
-    COMMITS. A crash mid-batch re-reads that batch, and `ON CONFLICT DO
-    NOTHING` on the primary key makes the replay harmless.
+    COMMITS. A crash mid-batch re-reads that batch, and the upsert in
+    `_write_events` is a no-op on unchanged rows, so the replay is harmless.
     """
     from .doctor import build
     from .sources import Tier, enabled
@@ -92,10 +92,14 @@ def cmd_ingest(args) -> int:
             since = cur.fetchone()[0]
         conn.commit()
 
-        n = 0
+        n = refreshed = 0
         try:
             for batch in _chunked(ad.fetch(since=since), BATCH_SIZE):
-                _write_events(conn, batch)
+                changed = _write_events(conn, batch)
+                # Same transaction as the event update: a crash between the
+                # two would leave a segment citing text it no longer shows,
+                # and nothing would ever revisit it.
+                refreshed += _refresh_segments(conn, changed)
                 # Advance to the max WATERMARK in the batch, not the last ts.
                 # For rollup adapters the two differ: ts is the span start and
                 # resuming from it re-reads the span, producing a duplicate
@@ -117,23 +121,101 @@ def cmd_ingest(args) -> int:
 
         _set_error(conn, policy.source, None)
         conn.commit()
-        log.info("%s: %d events", policy.source, n)
+        log.info("%s: %d events, %d segments refreshed", policy.source, n, refreshed)
         total += n
 
     log.info("ingested %d events", total)
     return 0
 
 
-def _write_events(conn, batch) -> None:
+def _write_events(conn, batch) -> list[str]:
+    """Upsert a batch; return the keys of EXISTING events whose text changed.
+
+    `DO NOTHING` was right while every source was append-only, and wrong the
+    day a transcript landed on a voice note that had been ingested empty: the
+    row existed, so the transcript was dropped. 4,637 voice/video notes sat
+    empty in chronicle while telegram-sync held text for all but 93.
+
+    Two guards on the update. Unchanged text is not an update, so re-reading
+    the overlap window costs nothing. And an empty incoming text never
+    overwrites a non-empty one: Telegram cannot edit a message to empty, so
+    that only happens when a source loses data, and the index should not
+    follow it down.
+
+    Inserted vs updated is told apart by `ingested_at`: the column defaults to
+    now(), which is fixed for the transaction, and an UPDATE leaves it alone.
+    """
+    import json
+
     rows = [(e.source, e.source_id, e.ts, e.kind, e.actor, e.text,
-             __import__("json").dumps(e.payload, default=str),
+             json.dumps(e.payload, default=str),
              e.reply_to, e.thread_key) for e in batch]
+    changed: list[str] = []
     with conn.cursor() as cur:
         cur.executemany(
             """INSERT INTO event (source, source_id, ts, kind, actor, text,
                                   payload, reply_to, thread_key)
                VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)
-               ON CONFLICT (source, source_id, ts) DO NOTHING""", rows)
+               ON CONFLICT (source, source_id, ts) DO UPDATE
+                  SET text = EXCLUDED.text, payload = EXCLUDED.payload
+                WHERE event.text IS DISTINCT FROM EXCLUDED.text
+                  AND EXCLUDED.text <> ''
+               RETURNING source || ':' || source_id, ingested_at < now()""",
+            rows, returning=True)
+        while True:
+            changed += [key for key, updated in cur.fetchall() if updated]
+            if not cur.nextset():
+                break
+    return changed
+
+
+# Columns every segment builder reads, in this order. `chat_title` is in the
+# payload for telegram and absent elsewhere, where the thread key stands in.
+_EVENT_COLS = """e.source, e.source_id, e.ts, e.actor, e.text, e.transcript,
+                 e.ocr_text, e.reply_to, e.person_id, e.payload->>'chat_title'"""
+
+
+def _events_by_keys(cur, keys: list[str]) -> list[tuple]:
+    """Event rows for `source:source_id` keys, oldest first.
+
+    Split into (source, source_id) and joined against the primary key rather
+    than compared as `source || ':' || source_id`, which no index covers.
+    The prefix is the source (hard-won fact 32), and a source_id may itself
+    contain ':' — telegram's is `chat:msg` — so split once, from the left.
+    """
+    if not keys:
+        return []
+    srcs, sids = zip(*(k.split(":", 1) for k in keys))
+    cur.execute(
+        f"""SELECT {_EVENT_COLS}
+              FROM event e
+              JOIN unnest(%s::text[], %s::text[]) AS k(src, sid)
+                ON e.source = k.src AND e.source_id = k.sid
+             ORDER BY e.ts, e.source_id""", (list(srcs), list(sids)))
+    return cur.fetchall()
+
+
+def _refresh_segments(conn, keys: list[str]) -> int:
+    """Rebuild every segment that cites a changed event, in place.
+
+    In place, not delete-and-reinsert: facts, commitments and entity mentions
+    hang off `segment_id`, and one of those edges does not cascade (hard-won
+    fact 31). Membership does not change — only the text — so the segment
+    keeps its id and loses its embedding, which the next `embed` restores.
+    """
+    if not keys:
+        return 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """SELECT s.segment_id, s.thread_key, s.source_event_ids, src.density
+                 FROM segment s JOIN source src ON src.source = s.sources[1]
+                WHERE s.source_event_ids && %s::text[]""", (keys,))
+        hits = cur.fetchall()
+        for segment_id, thread_key, ids, density in hits:
+            rows = _events_by_keys(cur, ids)
+            if rows:
+                _update_segment(cur, segment_id, _segment_fields(rows, thread_key, density))
+    return len(hits)
 
 
 def _set_watermark(conn, source: str, ts: datetime) -> None:
@@ -200,75 +282,155 @@ def cmd_fit_gaps(args) -> int:
 # ---------------------------------------------------------------------------
 
 def cmd_segment(args) -> int:
-    """event -> segment. The highest-value stage in the system.
+    """event -> segment, for events no segment cites yet. The highest-value
+    stage in the system.
+
+    Incremental. The first version re-read every thread and INSERTed with no
+    conflict target, which is correct exactly once: a second run duplicates
+    all 50,096 segments. So nothing re-ran it, and the 4,711 events ingested
+    on 2026-09-14 sat unsegmented and unsearchable for twelve days.
 
     Only NARRATIVE sources are segmented. TELEMETRY and DISCRETE events arrive
     pre-aggregated from their adapters and map 1:1 to segments — running a
     time-gap segmenter over them produces meaningless thresholds.
     """
-    import json
-
-    from .segment import SEGMENTER_VERSION, Event, segment_chat
-
     conn = connect()
     with conn.cursor() as cur:
+        # Materialised once per run: ~680k keys, a hash anti-join away from
+        # "which events are unsegmented". Probing each segment's array per
+        # event instead is thread-size x segment-count.
+        cur.execute("""CREATE TEMP TABLE seg_key AS
+                       SELECT DISTINCT unnest(source_event_ids) AS k FROM segment""")
+        cur.execute("ANALYZE seg_key")
         cur.execute("""SELECT e.thread_key, s.density,
                               coalesce(tc.gap_seconds, 1800)
                        FROM event e
                        JOIN source s ON s.source = e.source
                        LEFT JOIN thread_config tc ON tc.thread_key = e.thread_key
+                       WHERE NOT EXISTS (SELECT 1 FROM seg_key
+                                         WHERE k = e.source || ':' || e.source_id)
                        GROUP BY e.thread_key, s.density, tc.gap_seconds""")
         threads = cur.fetchall()
 
-    made = 0
+    made = extended = 0
     for thread_key, density, gap in threads:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT source, source_id, ts, actor, text, transcript,
-                          ocr_text, reply_to, person_id
-                   FROM event WHERE thread_key = %s ORDER BY ts""", (thread_key,))
-            rows = cur.fetchall()
-        if not rows:
-            continue
+                f"""SELECT {_EVENT_COLS} FROM event e
+                     WHERE e.thread_key = %s
+                       AND NOT EXISTS (SELECT 1 FROM seg_key
+                                       WHERE k = e.source || ':' || e.source_id)
+                     ORDER BY e.ts, e.source_id""", (thread_key,))
+            new = cur.fetchall()
+            if not new:
+                continue
 
-        if density == "narrative":
-            events = [Event(message_id=i, chat_id=0, sender_id=r[8],
-                            sender_name=r[3] or "?", ts=r[2],
-                            text=r[4] or "", reply_to_id=None)
-                      for i, r in enumerate(rows)]
-            groups = [[rows[e.message_id] for e in seg.messages]
-                      for seg in segment_chat(events, gap_seconds=gap)]
-        else:
-            # pre-aggregated: one event, one segment
-            # Pre-aggregated: one event, one segment. The adapter already did
-            # the filtering, so these are substantive by construction.
-            groups = [[r] for r in rows]
+            if density != "narrative":
+                # Pre-aggregated: one event, one segment. The adapter already
+                # did the filtering, so these are substantive by construction.
+                groups, last_id = [[r] for r in new], None
+            else:
+                groups, last_id = _segment_narrative(cur, thread_key, new, gap)
 
-        for g in groups:
-            raw = "\n".join(f"{r[3] or '?'}: {r[4] or r[5] or r[6] or ''}" for r in g)
-            header = (f"[thread: {thread_key}] [source: {g[0][0]}] "
-                      f"[date: {g[0][2]:%Y-%m}]")
-            with conn.cursor() as cur:
-                cur.execute(
-                    """INSERT INTO segment
-                         (thread_key, sources, started_at, ended_at, event_count,
-                          source_event_ids, raw_text, embed_text, is_substantive,
-                          segmenter_version)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (thread_key, list({r[0] for r in g}), g[0][2], g[-1][2], len(g),
-                     [f"{r[0]}:{r[1]}" for r in g], raw,
-                     f"{header}\n{raw}",
-                     # Filler-burst detection is a NARRATIVE concern. A wakapi
-                     # coding session or a dawarich stay is substantive by
-                     # construction; applying the text heuristic marked all of
-                     # them False and hid them from every query.
-                     _substantive(g) if density == "narrative" else True,
-                     SEGMENTER_VERSION))
-            made += 1
+            for i, g in enumerate(groups):
+                fields = _segment_fields(g, thread_key, density)
+                if i == 0 and last_id is not None:
+                    _update_segment(cur, last_id, fields)
+                    extended += 1
+                else:
+                    _insert_segment(cur, thread_key, fields)
+                    made += 1
         conn.commit()
 
-    log.info("created %d segments", made)
+    log.info("created %d segments, extended %d", made, extended)
     return 0
+
+
+def _segment_narrative(cur, thread_key: str, new: list[tuple], gap: int):
+    """Segment a thread's new events, continuing its last segment if they
+    reach back into it.
+
+    Returns (groups, last_id). When last_id is set, groups[0] REPLACES that
+    segment: the new events are re-segmented together with its events, so a
+    conversation that was still going when the previous run happened keeps
+    growing instead of being cut at the run boundary. groups[0] always starts
+    with the old segment's first event — the input is sorted and that event is
+    its minimum — so updating in place is always a valid replacement.
+
+    ponytail: events OLDER than the last segment (a late backfill of history)
+    are segmented among themselves and never merged into the older segments
+    they fall between. Rare — telegram-sync's history is synced — and fixing
+    it means re-cutting arbitrary interior segments; revisit if backfills of
+    old chats become routine.
+    """
+    from .segment import Event, segment_chat
+
+    cur.execute(
+        """SELECT segment_id, started_at, source_event_ids FROM segment
+            WHERE thread_key = %s ORDER BY started_at DESC, segment_id DESC
+            LIMIT 1""", (thread_key,))
+    last = cur.fetchone()
+
+    def cut(rows):
+        events = [Event(message_id=i, chat_id=0, sender_id=r[8],
+                        sender_name=r[3] or "?", ts=r[2],
+                        text=r[4] or "", reply_to_id=None)
+                  for i, r in enumerate(rows)]
+        return [[rows[e.message_id] for e in seg.messages]
+                for seg in segment_chat(events, gap_seconds=gap)]
+
+    if last is None:
+        return cut(new), None
+
+    last_id, last_start, last_keys = last
+    orphans = [r for r in new if r[2] < last_start]
+    tail = [r for r in new if r[2] >= last_start]
+    groups = cut(orphans) if orphans else []
+    if not tail:
+        return groups, None
+    # Replacement first, so the caller's "groups[0] updates last_id" holds.
+    return cut(_events_by_keys(cur, last_keys) + tail) + groups, last_id
+
+
+def _segment_fields(g: list[tuple], thread_key: str, density: str) -> tuple:
+    """Everything a segment row derives from its events, in insert order."""
+    from .segment import SEGMENTER_VERSION, build_embed_text
+
+    raw = "\n".join(f"{r[3] or '?'}: {r[4] or r[5] or r[6] or ''}" for r in g)
+    chat = next((r[9] for r in g if len(r) > 9 and r[9]), thread_key)
+    people = list(dict.fromkeys(r[3] for r in g if r[3]))
+    return (sorted({r[0] for r in g}), g[0][2], g[-1][2], len(g),
+            [f"{r[0]}:{r[1]}" for r in g], raw,
+            build_embed_text(raw, g[0][2], chat, people),
+            # Filler-burst detection is a NARRATIVE concern. A wakapi coding
+            # session or a dawarich stay is substantive by construction;
+            # applying the text heuristic marked all of them False and hid
+            # them from every query.
+            _substantive(g) if density == "narrative" else True,
+            SEGMENTER_VERSION)
+
+
+def _insert_segment(cur, thread_key: str, fields: tuple) -> None:
+    cur.execute(
+        """INSERT INTO segment
+             (thread_key, sources, started_at, ended_at, event_count,
+              source_event_ids, raw_text, embed_text, is_substantive,
+              segmenter_version)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""", (thread_key, *fields))
+
+
+def _update_segment(cur, segment_id: int, fields: tuple) -> None:
+    """Replace a segment's content, keep its id, and invalidate everything
+    derived from the old content: the embedding (re-encoded by `embed`) and
+    the enrichment (redone by `enrich`, which replaces its facts)."""
+    cur.execute(
+        """UPDATE segment
+              SET sources = %s, started_at = %s, ended_at = %s, event_count = %s,
+                  source_event_ids = %s, raw_text = %s, embed_text = %s,
+                  is_substantive = %s, segmenter_version = %s,
+                  embedding = NULL, lemmatized_text = NULL,
+                  embedder_version = NULL, enriched_at = NULL
+            WHERE segment_id = %s""", (*fields, segment_id))
 
 
 def _substantive(group) -> bool:
@@ -326,15 +488,189 @@ def cmd_embed(args) -> int:
 # ---------------------------------------------------------------------------
 
 def cmd_enrich(args) -> int:
-    """Local LLM pass: summary, topics, facts, commitments.
+    """Cloud LLM pass: summary, topics, facts, commitments. See enrich.py.
 
-    Deliberately last and deliberately optional. Retrieval works without it,
-    so ship first and let this grind. Newest-first for the same reason.
+    Additive and bounded: at most ENRICH_LIMIT segments per run (default
+    2,000), newest first, so the nightly run finishes and the recent past is
+    useful while the backfill grinds. Every enriched segment loses its
+    embedding — embed_text now carries its topics and facts — so `all` runs
+    this BEFORE `embed`, and the re-encode happens in the same run.
+
+    A failed call leaves that segment unenriched and it is retried next run.
+    ponytail: a segment the model can never answer is retried every night;
+    add a failure counter if the log shows the same ids recurring.
     """
-    log.warning("enrich is not wired to a model yet — see docs/DEPLOY.md step 5. "
-                "Run ingest/segment/embed first and measure against grep before "
-                "spending weeks of CPU here.")
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .enrich import Client
+
+    client = Client.from_env()
+    if client is None:
+        log.warning("enrich skipped: set ENRICH_MODEL and LITELLM_API_KEY")
+        return 0
+    limit = int(os.environ.get("ENRICH_LIMIT", "2000"))
+    workers = int(os.environ.get("ENRICH_CONCURRENCY", "8"))
+
+    conn = connect()
+    with conn.cursor() as cur:
+        cur.execute("SELECT predicate FROM fact_predicate ORDER BY predicate")
+        predicates = [r[0] for r in cur]
+    if not predicates:
+        raise SystemExit("fact_predicate is empty — apply migrations/005_incremental.sql")
+
+    done = failed = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        while done + failed < limit:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT s.segment_id, s.thread_key, s.started_at, s.ended_at,
+                              s.raw_text, s.source_event_ids
+                         FROM segment s JOIN source src ON src.source = s.sources[1]
+                        WHERE s.enriched_at IS NULL AND s.is_substantive
+                          AND src.density = 'narrative'
+                        ORDER BY s.started_at DESC
+                        LIMIT %s OFFSET %s""",
+                    (min(workers * 8, limit - done - failed), failed))
+                rows = cur.fetchall()
+                # (OFFSET skips this run's failures, which stay unenriched.)
+                chats = {r[0]: _chat_and_people(cur, r[5], r[1]) for r in rows}
+            if not rows:
+                break
+
+            def call(r):
+                try:
+                    return r, client.extract(chats[r[0]][0], r[2], r[4], predicates)
+                except Exception as exc:                    # noqa: BLE001
+                    log.warning("enrich segment %s failed: %s", r[0], exc)
+                    return r, None
+
+            for r, reply in pool.map(call, rows):
+                if reply is None:
+                    failed += 1
+                    continue
+                _write_enrichment(conn, r, reply, set(predicates), *chats[r[0]])
+                done += 1
+            with conn.cursor() as cur:
+                cur.execute("SELECT resolve_fact_conflicts()")
+            conn.commit()
+            log.info("enriched %d (%d failed)", done, failed)
+
     return 0
+
+
+def _chat_and_people(cur, keys: list[str], thread_key: str) -> tuple[str, list[str]]:
+    rows = _events_by_keys(cur, keys)
+    chat = next((r[9] for r in rows if r[9]), thread_key)
+    return chat, list(dict.fromkeys(r[3] for r in rows if r[3]))
+
+
+def _write_enrichment(conn, seg: tuple, reply: dict, predicates: set[str],
+                      chat: str, people: list[str]) -> None:
+    """Replace whatever a previous enrichment of this segment produced.
+
+    Replace, not add: `_update_segment` clears `enriched_at` when a segment's
+    text changes, so a second pass is the normal case, and its facts must
+    supersede the first pass's rather than sit beside them as corroboration.
+    """
+    from .enrich import EXTRACTOR_VERSION, clean, fact_line
+    from .resolve import skeleton_key, translit_key
+    from .segment import build_embed_text
+
+    segment_id, _thread, started, ended, raw, ids = seg
+    out = clean(reply, predicates)
+    version = int(ended.timestamp() * 1000)     # epoch millis of the source
+    refs = [k.split(":", 1) for k in ids]
+
+    with conn.cursor() as cur:
+        for kind, table in (("fact", "fact"), ("commitment", "commitment")):
+            cur.execute(
+                f"""DELETE FROM projection_dep WHERE projection_kind = %s
+                      AND projection_id IN (SELECT {kind}_id FROM {table}
+                                            WHERE source_segment_id = %s)""",
+                (kind, segment_id))
+            cur.execute(f"DELETE FROM {table} WHERE source_segment_id = %s",
+                        (segment_id,))
+        cur.execute("DELETE FROM entity_mention WHERE segment_id = %s", (segment_id,))
+
+        for f in out["facts"]:
+            entity_id = _entity(cur, f["subject"], started, translit_key, skeleton_key)
+            cur.execute("""INSERT INTO entity_mention (entity_id, segment_id, ts)
+                           VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""",
+                        (entity_id, segment_id, started))
+            cur.execute(
+                """INSERT INTO fact (subject_id, predicate, object_text, t_valid,
+                                     version, confidence, source_segment_id,
+                                     source_event_ids, extractor_version)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING fact_id""",
+                (entity_id, f["predicate"], f["object"], started, version,
+                 f["confidence"], segment_id, ids, EXTRACTOR_VERSION))
+            _cite(cur, "fact", cur.fetchone()[0], refs)
+
+        for c in out["commitments"]:
+            cur.execute(
+                """INSERT INTO commitment (text, direction, stated_at, due_at,
+                                          confidence, source_segment_id,
+                                          source_event_ids, extractor_version)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING commitment_id""",
+                (c["text"], c["direction"], started, c["due"], c["confidence"],
+                 segment_id, ids, EXTRACTOR_VERSION))
+            _cite(cur, "commitment", cur.fetchone()[0], refs)
+
+        cur.execute(
+            """UPDATE segment
+                  SET summary = %s, topics = %s, importance = %s, sentiment = %s,
+                      embed_text = %s, extractor_version = %s, enriched_at = now(),
+                      embedding = NULL, lemmatized_text = NULL, embedder_version = NULL
+                WHERE segment_id = %s""",
+            (out["summary"], out["topics"], out["importance"], out["sentiment"],
+             build_embed_text(raw, started, chat, people,
+                              facts=[fact_line(f) for f in out["facts"]],
+                              topics=out["topics"]),
+             EXTRACTOR_VERSION, segment_id))
+
+
+def _entity(cur, name: str, seen: datetime, translit_key, skeleton_key) -> int:
+    """Find-or-create a person by coarse phonetic key.
+
+    Tier 1 only (docs/ADR-002): the phonetic key is "usually correct" and
+    merges Егор/Єгор/Yehor. The skeleton tier deliberately over-merges
+    (Дина/Дон -> dn) and is a candidate generator, never a decision, so it is
+    stored for later resolution and not acted on here.
+    """
+    key = translit_key(name)
+    cur.execute("""SELECT entity_id FROM entity
+                    WHERE entity_type = 'person' AND %s = ANY(phonetic_keys)
+                    ORDER BY mention_count DESC LIMIT 1""", (key,))
+    row = cur.fetchone()
+    if row is None:
+        skel = skeleton_key(name)
+        cur.execute(
+            """INSERT INTO entity (entity_type, canonical_name, aliases,
+                                   phonetic_keys, skeleton_keys, extractor_version)
+               VALUES ('person', %s, %s, %s, %s, 'enrich-2026.09-v1')
+               ON CONFLICT (entity_type, canonical_name)
+                 DO UPDATE SET phonetic_keys = entity.phonetic_keys
+               RETURNING entity_id""",
+            (name, [name], [key], [skel] if len(skel) >= 2 else []))
+        row = cur.fetchone()
+    cur.execute(
+        """UPDATE entity SET mention_count = mention_count + 1,
+                  first_seen_at = least(first_seen_at, %s),
+                  last_seen_at = greatest(last_seen_at, %s),
+                  aliases = CASE WHEN %s = ANY(aliases) THEN aliases
+                                 ELSE aliases || %s::text END
+            WHERE entity_id = %s""", (seen, seen, name, name, row[0]))
+    return row[0]
+
+
+def _cite(cur, kind: str, projection_id: int, refs: list[list[str]]) -> None:
+    """projection_dep rows: what `chronicle.purge` walks to delete a projection
+    when the events it came from are erased. Refcounted from day one, because
+    retrofitting it is the expensive part (backflow)."""
+    cur.executemany(
+        """INSERT INTO projection_dep (projection_kind, projection_id, source, source_id)
+           VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+        [(kind, projection_id, src, sid) for src, sid in refs])
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +685,9 @@ COMMANDS = {
 
 
 def cmd_all(args) -> int:
-    for name in ("ingest", "fit-gaps", "segment", "embed"):
+    # enrich BEFORE embed: enriching rewrites embed_text and clears the
+    # embedding, so this order re-encodes it in the same run.
+    for name in ("ingest", "fit-gaps", "segment", "enrich", "embed"):
         log.info("=== %s ===", name)
         rc = COMMANDS[name](args)
         if rc:

@@ -60,7 +60,9 @@ SELECT 'stratified bins: ' || count(DISTINCT bin_start) || ', rows: ' || count(*
 FROM stratified_search((SELECT embedding FROM segment LIMIT 1), '3 months', 10);
 
 -- bi-temporal facts
-INSERT INTO fact_predicate(predicate, single_valued) VALUES ('lives_in', TRUE);
+-- seeded by migrations/005; kept so this file also runs against 001-004 alone
+INSERT INTO fact_predicate(predicate, single_valued) VALUES ('lives_in', TRUE)
+    ON CONFLICT (predicate) DO NOTHING;
 INSERT INTO entity(entity_type, canonical_name, extractor_version) VALUES ('person','Аня','v1');
 INSERT INTO fact(subject_id, predicate, object_text, t_valid, version, confidence,
                  source_event_ids, extractor_version)

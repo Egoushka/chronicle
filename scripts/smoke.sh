@@ -15,12 +15,15 @@ psql -v ON_ERROR_STOP=1 -q -d "$DB" -f scripts/smoke.sql
 
 # The erasure path deletes across nine tables, three of whose edges do NOT
 # cascade, and every defect it has had so far was SQL semantics no unit test
-# can reach. Skipped rather than failed when psycopg is absent: `make test`
-# deliberately installs neither a driver nor a database.
-if python3 -c "import psycopg" 2>/dev/null; then
+# can reach. worker-itest runs the pipeline repeatedly, which is the property
+# a scheduled worker needs and a single pass can never show. Skipped rather
+# than failed when psycopg is absent: `make test` deliberately installs
+# neither a driver nor a database.
+if python3 -c "import psycopg, httpx" 2>/dev/null; then
     python3 scripts/purge-itest.py
     python3 scripts/tally-itest.py "$DB"
+    python3 scripts/worker-itest.py
 else
-    echo "purge-itest, tally-itest SKIPPED (no psycopg)"
+    echo "purge-itest, tally-itest, worker-itest SKIPPED (no psycopg/httpx)"
 fi
 echo "smoke OK"

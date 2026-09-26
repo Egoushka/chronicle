@@ -287,19 +287,23 @@ def _merge_runts(segments: list[Segment], merge_below: int, max_messages: int) -
 # ============================================================================
 
 def build_embed_text(
-    session: Segment,
+    raw_text: str,
+    started_at: datetime,
     chat_title: str,
     participant_names: Sequence[str],
     facts: Sequence[str] = (),
     topics: Sequence[str] = (),
 ) -> str:
+    """Primitives, not a `Segment`: the worker builds segments from event
+    rows, and until 2026-09-26 that is why nothing called this — the worker
+    wrote its own weaker `[thread:] [source:]` header instead."""
     header = (
         f"[chat: {chat_title}] "
         f"[with: {', '.join(participant_names)}] "
-        f"[date: {session.started_at:%Y-%m}] "
-        f"[weekday: {session.started_at:%A}]"
+        f"[date: {started_at:%Y-%m}] "
+        f"[weekday: {started_at:%A}]"
     )
-    parts = [header, session.raw_text]
+    parts = [header, raw_text]
     if topics:
         parts.append("|| topics: " + ", ".join(topics))
     if facts:
