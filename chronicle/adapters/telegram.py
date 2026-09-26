@@ -178,7 +178,12 @@ class TelegramAdapter(SqlAdapter):
                     source_id=f"{chat_id}:{msg_id}",
                     ts=ts,
                     text=text or "",
-                    actor=sender_name,
+                    # One name for Yehor. telegram-sync writes "me" for an
+                    # outgoing message on its backfill path and his display
+                    # name on the live path, so 7,781 of 407,650 sent messages
+                    # carried a second identity (2026-09-26) — into segment
+                    # headers and into entity mention counts.
+                    actor="me" if direction == "sent" else sender_name,
                     kind="message",
                     reply_to=f"{chat_id}:{reply_to_id}" if reply_to_id else None,
                     payload={

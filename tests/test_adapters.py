@@ -855,3 +855,15 @@ def test_wakapi_interleaved_projects_do_not_fragment(tmp_path):
     assert all(e.payload["minutes"] >= 57 for e in events)
     marks = [e.watermark_ts for e in events]
     assert marks == sorted(marks), "must stream in watermark order for resume"
+
+
+def test_telegram_outgoing_messages_have_one_author(telegram_db):
+    """telegram-sync names Yehor "me" on one path and by display name on the
+    other; the adapter must not carry the split into the index."""
+    conn = sqlite3.connect(telegram_db)
+    conn.execute("UPDATE messages SET sender_name = 'Yehor Hrushevskyi' WHERE id = 1")
+    conn.commit()
+    conn.close()
+    sent = [e for e in TelegramAdapter(telegram_db, exclude_bot_chats=False).fetch()
+            if e.payload["direction"] == "sent"]
+    assert sent and {e.actor for e in sent} == {"me"}
