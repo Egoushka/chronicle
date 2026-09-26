@@ -162,7 +162,10 @@ BEGIN
       JOIN fact_predicate fp ON fp.predicate = f.predicate
       WHERE fp.single_valued AND f.t_invalid IS NULL AND f.t_expired IS NULL
   )
-  UPDATE fact f SET t_invalid = s.next_valid
+  -- greatest(): version order is not guaranteed to be t_valid order (a
+  -- writer may version by any monotone clock), and closing a fact before it
+  -- began violates fact_valid_order and aborts the whole resolution.
+  UPDATE fact f SET t_invalid = greatest(s.next_valid, f.t_valid)
   FROM superseded s
   WHERE f.fact_id = s.fact_id AND s.next_valid IS NOT NULL;
   GET DIAGNOSTICS n = ROW_COUNT;

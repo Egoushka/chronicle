@@ -596,7 +596,11 @@ def _write_enrichment(conn, seg: tuple, reply: dict, predicates: set[str],
 
     segment_id, _thread, started, ended, raw, ids = seg
     out = clean(reply, predicates)
-    version = int(ended.timestamp() * 1000)     # epoch millis of the source
+    # Epoch millis of the segment START — the same instant as t_valid.
+    # Versioning by the END made version order and time order disagree for
+    # overlapping segments, and resolve_fact_conflicts() then closed a fact
+    # before it began (fact_valid_order violation; first live run 2026-09-26).
+    version = int(started.timestamp() * 1000)
     refs = [k.split(":", 1) for k in ids]
 
     with conn.cursor() as cur:
@@ -713,10 +717,18 @@ def cmd_all(args) -> int:
     deferred = 0
     for name in ("ingest", "fit-gaps", "segment", "enrich", "embed"):
         log.info("=== %s ===", name)
+        if name == "enrich":
+            # An exception here must not skip embed either: the first live run
+            # died on a constraint violation and left new segments unembedded.
+            try:
+                rc = COMMANDS[name](args)
+            except Exception:                              # noqa: BLE001
+                log.exception("enrich crashed; continuing to embed")
+                rc = 1
+            deferred = deferred or rc
+            continue
         rc = COMMANDS[name](args)
-        if rc and name == "enrich":
-            deferred = rc
-        elif rc:
+        if rc:
             return rc
     return deferred
 
