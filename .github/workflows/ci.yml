@@ -26,7 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
-      - run: pip install 'psycopg[binary]'   # scripts/purge-itest.py, run by smoke.sh
+      # scripts/*-itest.py, run by smoke.sh. numpy: worker-itest imports segment.py.
+      - run: pip install 'psycopg[binary]' httpx numpy
       - name: apply migrations and smoke-test every function
         env: { PGPASSWORD: postgres, PGHOST: localhost, PGUSER: postgres }
         run: ./scripts/smoke.sh

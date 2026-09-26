@@ -30,8 +30,9 @@ class MinifluxAdapter(SqlAdapter):
             FROM entries e
             JOIN feeds f ON f.id = e.feed_id
             WHERE (e.status = 'read' OR e.starred)     -- evidence you saw it
-              AND (%(since)s IS NULL OR e.published_at > %(since)s)
-              AND (%(until)s IS NULL OR e.published_at <= %(until)s)
+              -- Cast every nullable bound (hard-won fact 16).
+              AND (%(since)s::timestamptz IS NULL OR e.published_at > %(since)s::timestamptz)
+              AND (%(until)s::timestamptz IS NULL OR e.published_at <= %(until)s::timestamptz)
             ORDER BY e.published_at
         """
         for eid, pub, title, url, feed, status, starred in self._stream(

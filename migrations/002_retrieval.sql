@@ -101,7 +101,14 @@ SELECT e.source, e.source_id, e.ts,
 FROM event e
 WHERE to_tsvector('ru_unaccent',
         coalesce(e.text,'')||' '||coalesce(e.transcript,'')||' '||coalesce(e.ocr_text,''))
-      @@ to_tsquery('ru_unaccent', array_to_string(patterns, ' | '))
+      -- One PHRASE query per pattern, OR-ed. Joining raw patterns into
+      -- to_tsquery() was a syntax error for any multi-word term ("game of
+      -- thrones" -> 500 on /first-mention, 2026-09-26). A pattern that is all
+      -- stopwords yields an empty query and is dropped. Scalar subquery, so
+      -- it is evaluated once and event_fts_idx stays usable.
+      @@ (SELECT string_agg('(' || q::text || ')', ' | ')::tsquery
+            FROM unnest(patterns) p, phraseto_tsquery('ru_unaccent', p) q
+           WHERE numnode(q) > 0)
    OR e.text ILIKE ANY (SELECT '%'||p||'%' FROM unnest(patterns) p)
 ORDER BY e.ts ASC
 LIMIT n_verify;
@@ -155,7 +162,10 @@ BEGIN
       JOIN fact_predicate fp ON fp.predicate = f.predicate
       WHERE fp.single_valued AND f.t_invalid IS NULL AND f.t_expired IS NULL
   )
-  UPDATE fact f SET t_invalid = s.next_valid
+  -- greatest(): version order is not guaranteed to be t_valid order (a
+  -- writer may version by any monotone clock), and closing a fact before it
+  -- began violates fact_valid_order and aborts the whole resolution.
+  UPDATE fact f SET t_invalid = greatest(s.next_valid, f.t_valid)
   FROM superseded s
   WHERE f.fact_id = s.fact_id AND s.next_valid IS NOT NULL;
   GET DIAGNOSTICS n = ROW_COUNT;

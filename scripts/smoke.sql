@@ -60,7 +60,9 @@ SELECT 'stratified bins: ' || count(DISTINCT bin_start) || ', rows: ' || count(*
 FROM stratified_search((SELECT embedding FROM segment LIMIT 1), '3 months', 10);
 
 -- bi-temporal facts
-INSERT INTO fact_predicate(predicate, single_valued) VALUES ('lives_in', TRUE);
+-- seeded by migrations/005; kept so this file also runs against 001-004 alone
+INSERT INTO fact_predicate(predicate, single_valued) VALUES ('lives_in', TRUE)
+    ON CONFLICT (predicate) DO NOTHING;
 INSERT INTO entity(entity_type, canonical_name, extractor_version) VALUES ('person','Аня','v1');
 INSERT INTO fact(subject_id, predicate, object_text, t_valid, version, confidence,
                  source_event_ids, extractor_version)
@@ -69,6 +71,14 @@ FROM (VALUES ('Харьков', timestamptz '2019-01-01', 1546300800000::bigint)
              ('Киев',    timestamptz '2022-06-01', 1654041600000::bigint),
              ('Львів',   timestamptz '2024-03-01', 1709251200000::bigint)) AS v(o,t,ver);
 SELECT 'facts invalidated: ' || resolve_fact_conflicts();
+-- version order disagreeing with t_valid order must not violate
+-- fact_valid_order (first live enrich run, 2026-09-26)
+INSERT INTO fact(subject_id, predicate, object_text, t_valid, version, confidence,
+                 source_event_ids, extractor_version)
+SELECT (SELECT entity_id FROM entity LIMIT 1), 'lives_in', v.o, v.t, v.ver, 0.9, '{c1:2}', 'v1'
+FROM (VALUES ('Одеса', timestamptz '2025-01-02', 1735700000000::bigint),
+             ('Дніпро', timestamptz '2025-01-01', 1735800000000::bigint)) AS v(o,t,ver);
+SELECT 'out-of-order versions resolved: ' || resolve_fact_conflicts();
 SELECT 'current fact: ' || object_text FROM v_current_facts;
 SELECT 'history: ' || object_text || ' [' || t_valid::date || ' -> ' ||
        coalesce(t_invalid::date::text,'present') || ']' FROM fact ORDER BY version;

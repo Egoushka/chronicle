@@ -134,8 +134,13 @@ def build(source: str):
     if source == "owntracks":
         root = _env("OWNTRACKS_STORE")
         return cls(root) if root else None
-    # API adapters need an injected fetch_page; doctor cannot construct them
-    # without the MCP wiring, so they are reported as SKIP rather than FAIL.
+    if source == "lastfm":
+        from .adapters.api_sources import lastfm_pages
+        key, user = _env("LASTFM_API_KEY"), _env("LASTFM_USER")
+        return cls(fetch_page=lastfm_pages(key, user)) if key and user else None
+    # The other API adapters need an injected fetch_page backed by credentials
+    # the box does not hold (Google OAuth for calendar, a Jira token), so they
+    # are reported as SKIP rather than FAIL.
     return None
 
 
@@ -175,7 +180,10 @@ def check_source(source: str) -> Check:
         return rows
 
     try:
-        rows = _sample(window_start.replace(tzinfo=None))
+        # AWARE, like the worker's `source.last_ingested_at` (timestamptz).
+        # A naive bound here tested a code path production never takes, and
+        # hid owntracks' naive/aware comparison until it ran for real.
+        rows = _sample(window_start)
         dormant = False
         if not rows:
             # A dormant source must still be VALIDATABLE. Falling back to the
@@ -218,9 +226,13 @@ def _validate(source: str, rows: list, density: Density) -> list[str]:
         problems.append(f"{len(bad_ts)}/{len(rows)} timestamps are not datetime "
                         f"(got {type(bad_ts[0].ts).__name__}) — route through coerce_ts")
 
-    # 2. Ascending order is a contract the resumable worker depends on.
+    # 2. Ascending order is a contract the resumable worker depends on — in
+    #    whatever the adapter RESUMES on. That is `ts` for most, and write time
+    #    (`watermark_ts`) for telegram, which streams in synced_at order so it
+    #    sees late transcripts; its message dates are legitimately unordered.
     ts = [r.ts for r in rows if isinstance(r.ts, datetime)]
-    if ts != sorted(ts):
+    marks = [r.watermark_ts for r in rows if isinstance(r.watermark_ts, datetime)]
+    if ts != sorted(ts) and marks != sorted(marks):
         problems.append("events are not in ascending ts order — resume will skip rows")
 
     # 3. The immich lesson: upload time masquerading as capture time. Any

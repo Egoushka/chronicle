@@ -1,4 +1,4 @@
-.PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab purge-excluded
+.PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab purge-excluded eval-homelab
 
 VENV  := .venv
 TOOLS := $(VENV)/bin/pytest
@@ -9,7 +9,7 @@ help:
 # pytest, ruff, and numpy — which segment.py imports at module scope, so the
 # suite cannot even be collected without it. Deliberately NOT `pip install -e
 # .`: that pulls FlagEmbedding and sentence-transformers, gigabytes of torch,
-# for 68 tests that touch neither a model nor a database.
+# for a unit suite that touches neither a model nor a database.
 $(TOOLS):
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip -q install pytest ruff numpy
@@ -81,3 +81,6 @@ eval-init: ## write the question template you must fill in by hand
 
 eval:      ## chronicle vs ripgrep on your own questions
 	python3 -m chronicle.evaluate compare
+
+eval-homelab: ## make eval ON THE BOX — the dump is the whole archive and stays there
+	ssh $${CHRONICLE_DOCTOR_HOST:-homelab} /srv/stacks/chronicle/scripts/eval-homelab.sh

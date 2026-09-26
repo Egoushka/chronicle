@@ -122,7 +122,7 @@ services:
     memswap_limit: 256m
     security_opt: [no-new-privileges:true]
 
-    # Probes /sse, NOT /health. FastMCP's SSE transport serves /sse and
+    # Probes /sse, NOT /health. The MCP SDK's SSE transport serves /sse and
     # /messages/ and nothing else — /health 404s, so the old check reported a
     # perfectly healthy server as unhealthy, and with autoheal=true that is an
     # infinite restart loop on a service that was working.
@@ -151,9 +151,9 @@ services:
   # cgroup at its cap is OOM-killed rather than swapped. There is no room for
   # a resident 7B model.
   #
-  # So: n8n (or a systemd timer) starts this, it processes a bounded batch,
+  # So: host cron starts it nightly through scripts/nightly.sh (the entry is
+  # homelab-gitops host/cron.d/chronicle), it processes a bounded batch,
   # checkpoints, and exits. An OOM kill costs one batch, not the run.
-  #   docker compose -f /srv/stacks/chronicle/compose.yaml run --rm chronicle-worker
   # ---------------------------------------------------------------------------
   chronicle-worker:
     build: .
@@ -165,9 +165,17 @@ services:
     environment:
       CHRONICLE_DB_URL: postgresql://chronicle:${DB_PASSWORD:?set DB_PASSWORD in chronicle/.env}@chronicle-db:5432/chronicle
       BATCH_SIZE: ${BATCH_SIZE:-500}
-      # Local model for enrichment. Runs only while this container runs.
-      ENRICH_MODEL: ${ENRICH_MODEL:-qwen3:8b-q4_K_M}
-      OLLAMA_URL: ${OLLAMA_URL:-http://litellm:4000/v1}
+      # Enrichment is a CLOUD model through LiteLLM (decided 2026-09-26). The
+      # "local 8B model" this used to name never existed: LiteLLM routes only
+      # to hosted providers, and a box that retired whisperx for 3.6 GiB has
+      # no room for a 5 GB model either. See chronicle/enrich.py.
+      ENRICH_MODEL: ${ENRICH_MODEL:-gemini-3.5-flash-lite}
+      ENRICH_URL: http://litellm:4000/v1
+      # 0 = off, pending measurement. The first batch (2,446 newest segments,
+      # 2026-09-26) moved the eval from 55.0% to 52.3% — about one lookup of
+      # 28, not conclusive, and not positive. Set ENRICH_LIMIT in .env to turn
+      # it back on for an A/B run against `make eval-homelab`.
+      ENRICH_LIMIT: ${ENRICH_LIMIT:-0}
       # Same reasoning as chronicle-api above. The worker encodes in batches
       # rather than one query at a time, so it is less sensitive than the API,
       # but it runs on the same contended 16 cores.
@@ -195,9 +203,11 @@ services:
       chronicle-db:
         condition: service_healthy
     # No `edge`: the worker talks to the DB and to LiteLLM's private address.
-    # It has no reason to be reachable from the tailnet. `dawarich_net` is
-    # read-only access to dawarich_db, which is not published to the host.
-    networks: [default, dawarich_net]
+    # It has no reason to be reachable from the tailnet. The source networks
+    # give read access to databases that publish no host port: dawarich_db
+    # (tier 1) and firefly-db (tier 2). forgejo was tier 2 as well and is gone
+    # from the box since 2026-09-16, so there is nothing of it left to join.
+    networks: [default, dawarich_net, firefly_net, litellm_net]
     profiles: [batch]
 
   # Stack-private. NEVER joins `edge` — a service reachable there hijacks DNS
@@ -260,6 +270,14 @@ networks:
   dawarich_net:
     external: true
     name: dawarich_default
+  firefly_net:
+    external: true
+    name: firefly_default
+  # `litellm` resolves only here; the service binds 192.0.2.10:4000 on the
+  # host, never loopback. Same join librechat and synapse use.
+  litellm_net:
+    external: true
+    name: litellm_default
 
 volumes:
   chronicle_pg:
