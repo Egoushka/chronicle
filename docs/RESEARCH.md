@@ -4,6 +4,11 @@
 **Corpus:** measured live from your `telegram-sync` MCP, not assumed
 **Constraints:** hybrid privacy boundary · self-hosted Hetzner · zero marginal API budget for backfill
 
+> **Read this as history.** It is the design research written before the first
+> line of chronicle, for its first deployment: "you" is that deployment's owner
+> and every number comes from their archive. What was built, and what changed
+> since, is in the README and the ADRs.
+
 > **Terminology note (2026-09-14).** Chronicle's aggregate unit — a time-gap
 > cluster of ~13 events — is called a **segment**, after SeCom's "segment-level"
 > in §2 below. It was called an `episode` until the rename in `migrations/003`;

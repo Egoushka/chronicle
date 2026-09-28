@@ -1,132 +1,157 @@
 # chronicle
 
-Personal event store and retrieval brain. Ingests Telegram, wakapi, dawarich
-(and whatever comes next) into one timeline, and serves it to `agent-runner`
-over MCP so the assistant can actually look things up.
+Self-hosted memory for one person's digital life. Chronicle ingests a chat
+archive and the activity streams you already self-host — location, coding
+time, spending, listening, photos — into one timeline, groups it into
+conversation **segments** before indexing, and serves it to AI assistants over
+[MCP](https://modelcontextprotocol.io).
 
-Deploys into [`homelab-gitops`](../homelab-gitops) as the `chronicle` stack.
+It runs entirely on your host: PostgreSQL with pgvector, a local BGE-M3
+encoder, an HTTP API and an MCP server. The one optional cloud call, an
+enrichment pass, is off by default.
 
----
+## Why segments, not messages
 
-## Why this exists
-
-The Telegram archive is 681,331 messages across 487 chats and 457 senders,
-2018-12-30 to now. The existing `telegram-sync` stack embeds **every message**
-into Qdrant. Measured against the real corpus:
+Chat archives are mostly filler. Measured on the reference deployment's
+archive — 681,331 Telegram messages across 487 chats, seven and a half years:
 
 | | |
 |---|---|
-| messages under 20 chars | **65.0%** (442,954) |
+| messages under 20 chars | **65.0%** |
 | messages under 60 chars | **94.0%** |
 | messages over 200 chars | **1.5%** |
 | messages with `reply_to_id` | **7.9%** |
 
-So ~442,000 of those vectors represent `ок`, `ага`, `+1`, `да`, `😂`. They are
-not retrieval units — they crowd every neighbourhood they land in and bury the
-1.5% of messages that carry a proposition.
+Embedding every message spends ~442,000 vectors on `ок`, `ага`, `+1`, `😂`.
+They crowd every nearest-neighbour search and bury the 1.5% that say
+something.
 
-**Chronicle's core move is aggregation before indexing.** Events are grouped
-into *segments* by a per-thread fitted time gap: 681k units become ~50k. The
-index gets ~11× smaller and retrieval gets better at the same time.
-
-Evidence, from SeCom (ICLR 2025), measuring retrieval quality by memory unit
-on conversational data — at ~30 tokens/turn, where ours are 5–10:
+So chronicle aggregates first. Events group into segments by a time gap
+fitted per conversation, with caps and reply edges as anchors: 685,401 events
+became 51,044 segments (13.4×), averaging 13 events and 488 characters. The
+index shrinks by an order of magnitude and retrieval gets better, which is what
+SeCom (ICLR 2025) measured for conversational memory units:
 
 ```
-segment-level   71.57   <- what this builds
+segment-level   71.57   <- what chronicle indexes
 turn-level      65.58
 session-level   63.16
-summaries       53.87-56.25   <- worst. Do not build a summary pyramid.
+summaries       53.87-56.25   <- worst; chronicle never builds a summary pyramid
 ```
 
-Full reasoning, benchmarks and citations: [`docs/RESEARCH.md`](docs/RESEARCH.md).
+The research behind it is [docs/RESEARCH.md](docs/RESEARCH.md); the decisions
+that followed are the ADRs in [docs/](docs).
 
-## It is not a Telegram tool
+## What it does
 
-Telegram is the richest channel, not the only one. **18 adapters**, five
-storage shapes, one `Event` shape downstream.
+- **18 source adapters over five storage shapes** — PostgreSQL, MariaDB,
+  SQLite, flat JSONL and HTTP APIs — all mapped onto one `Event`.
+- **A source policy layer.** Every source declares a density — narrative,
+  discrete, telemetry or ambient — and density decides how hard its adapter
+  aggregates before anything is indexed: wakapi heartbeats become coding
+  sessions, GPS points become stays and trips, scrobbles become listening
+  sessions. Twenty sources without a policy is the same mistake as indexing
+  every message, one level up.
+- **Hybrid retrieval.** Exact cosine over `halfvec(1024)` BGE-M3 embeddings —
+  no ANN: at this scale an exact scan is single-digit milliseconds and every
+  date filter stays exact — plus a lexical branch weighted by corpus IDF,
+  fused with reciprocal rank fusion. A question that names its own period
+  ("in January 2026") gets that window applied.
+- **Deterministic routing.** Lookup, first mention, change over time and
+  counting are different operations with different tools. Routing is rules,
+  logged and overridable; there is no trained router and no recency prior.
+- **Cross-script entity resolution** for Russian, Ukrainian and Latin
+  spellings of one name (Егор / Єгор / Yehor) — see
+  [ADR-002](docs/ADR-002-entity-resolution.md).
+- **Bi-temporal facts** whose conflicts resolve in code (`max(version)`),
+  never by asking a model which fact is newer.
+- **Erasure that follows dependencies.** Every projection cites its source
+  events, so excluding a chat removes everything derived from it.
+- **An evaluation harness** that scores chronicle against `ripgrep` on your own
+  questions.
 
-| tier | sources | why |
+## Sources
+
+| tier | sources | what they add |
 |---|---|---|
-| **1 · core** | `telegram` `wakapi` `dawarich` `calendar` | the archive is worth having with only these |
-| **2 · behaviour** | `firefly` `lastfm` `forgejo` `jira` | what you *did*, as opposed to what you *said* |
-| **3 · artifact** | `immich` `paperless` `gmail` `notion` `karakeep` `github` `linkedin` `slack` | things you made, saved, or were sent |
-| **4 · ambient** | `miniflux` `owntracks` | weak signal; on last, off first if precision drops |
+| 1 · core | `telegram` `wakapi` `dawarich` `calendar` | the archive is worth having with only these |
+| 2 · behaviour | `firefly` `lastfm` `forgejo` `jira` | what you *did*, as opposed to what you *said* |
+| 3 · artifact | `immich` `paperless` `gmail` `notion` `karakeep` `github` `linkedin` `slack` | things you made, saved or were sent |
+| 4 · ambient | `miniflux` `owntracks` | weak signal; first to go if precision drops |
 
-Storage shapes, because the homelab is not uniform and assuming it was is how
-the first version broke: **PostgreSQL** (telegram, immich, paperless,
-miniflux, forgejo, dawarich) · **MariaDB** (firefly) · **SQLite** (wakapi,
-karakeep) · **flat JSONL files** (owntracks) · **HTTP/MCP** (gmail, calendar,
-notion, slack, jira, linkedin, lastfm, github).
+The database-backed adapters read each app's own schema read-only: SQLite is
+opened with a `mode=ro` URI, and every query is checked by `doctor` before a
+single row is ingested. The Telegram adapter reads the SQLite database of a
+Telegram sync service; the schema it expects is in
+[`chronicle/adapters/telegram.py`](chronicle/adapters/telegram.py). The API
+adapters (calendar, jira, gmail, notion, github, linkedin, slack) take an
+injected page fetcher and still need wiring to a client; `lastfm` talks to the
+REST API directly.
 
-### The policy layer is the point
+Behavioural signals are the reason for the extra sources. *"What was happening
+in the months before things went wrong?"* Telegram tells you what you said;
+location, coding time, spending and photos tell you what you did, and nobody
+curates those.
 
-"Use all possible channels" has a failure mode that looks exactly like the one
-Chronicle was built to fix. Indexing 681k sub-20-char messages was the wrong
-**unit**. Turning on twenty sources without a policy is the wrong **source
-mix** — miniflux alone can contribute 100k article rows you never opened,
-immich has 400 near-identical burst frames per moment, and the archive becomes
-millions of events that are ~90% chaff. Precision collapses the same way.
+## Quick start
 
-So every source declares a **density**, and density decides how hard the
-adapter aggregates *before* anything reaches the segment layer:
+```bash
+git clone https://github.com/Egoushka/chronicle.git && cd chronicle
+cp .env.example .env                                   # DB_PASSWORD, the owner, one block per source
+cp compose.sources.example.yaml compose.override.yaml  # how the worker reaches your sources; trim it
+docker compose up -d chronicle-db chronicle-api chronicle-mcp
 
-- `NARRATIVE` — deliberate human text. Segmented into segments.
-- `DISCRETE` — one row really is one thing that happened. Passed through.
-- `TELEMETRY` — meaningful only in aggregate. **The adapter rolls it up**:
-  wakapi heartbeats → coding sessions, dawarich points → stays, lastfm
-  scrobbles → listening sessions, immich photos → photo sessions.
-- `AMBIENT` — stored, but kept off the default retrieval surface.
+docker compose --profile batch run --rm chronicle-worker python -m chronicle.worker doctor --tier 1
+docker compose --profile batch run --rm chronicle-worker python -m chronicle.worker all --tier 1
+```
 
-`chronicle/sources.py` also lists the ~40 homelab stacks that are explicitly
-**not** sources, so the boundary is documented rather than rediscovered. All
-57 stacks is not the goal; monitoring, qdrant and vaultwarden describe the
-machine, not the life.
+`doctor` is not optional. It checks driver reachability, timestamps that are
+really timestamps (SQLite returns TEXT), ordering, duplicate ids, unaggregated
+telemetry, empty narrative text, degenerate thread keys, and import time
+masquerading as event time — in about ten seconds, read-only. Every
+database-backed adapter here was wrong somewhere the first time it met a real
+database, and each would have surfaced hours into a backfill.
 
-`make test` enforces this: every adapter must have a policy, densities must
-match, and `dawarich`/`owntracks` are flagged as mutually exclusive (same GPS
-signal — enabling both double-counts every trip and the duplicate reads as
-corroboration).
+`all` runs ingest → fit-gaps → segment → enrich (off by default) → embed.
+Every stage is incremental and safe to re-run, so the same command is the
+nightly job; `scripts/nightly.sh` wraps it for cron. The full sequence,
+including what to check between stages, is [docs/DEPLOY.md](docs/DEPLOY.md).
 
-### Why more channels actually helps
+## Connect an assistant
 
-*"What was happening in the months before things went wrong?"* Telegram
-tells you what you **said**. Location tells you whether you stopped leaving
-the house, wakapi whether you stopped coding, firefly whether spending
-changed, lastfm what you played at 3am, immich whether you stopped taking
-photos. **The behavioural signals are more honest than the conversational
-ones, because you don't curate them.**
+The MCP server listens on `http://127.0.0.1:8031/sse` (SSE transport).
 
-And cross-source corroboration turns a guess into evidence: a trip mentioned
-in Telegram, confirmed by dawarich coordinates, photographed in immich, and
-paid for in firefly is a fact you can trust.
+| tool | answers |
+|---|---|
+| `recall` | open questions about what was said or happened — hybrid search over segments |
+| `first_mention` | when something first came up — an argmin over time, not a similarity search |
+| `evolution` | how a view changed — retrieves per time bin so early periods are not crowded out |
+| `tally` | counting — runs generated SQL as a SELECT-only role and returns the SQL with the result |
+| `timeline` | what was happening in a period, across every source |
+| `open_commitments` | promises with no evidence of being kept |
+| `ground` | the conversations behind a claim from another memory, including ones that contradict it |
 
-## Relationship to Hindsight
+The same operations are HTTP endpoints on `127.0.0.1:8030` (`/recall`,
+`/first-mention`, `/evolution`, `/tally`, `/timeline`, `/commitments`,
+`/ground`, `/stats`, `/health`). **Nothing authenticates.** Both ports are
+published on loopback only; reach them over an SSH tunnel or from another
+container on `chronicle_default`, never from a public network.
 
-They are opposites, which is why they compose.
+## Measure it
 
-| | Hindsight | Chronicle |
-|---|---|---|
-| origin | you decided it mattered | you never chose to save any of it |
-| volume | ~5,200 facts | 681k events / ~50k segments |
-| precision | high, curated | low, exhaustive |
-| evidence trail | none | nothing *but* evidence |
-| shape | a notebook you write in | a recording that ran the whole time |
+```bash
+make eval-init    # writes the question template; fill in 30-50 real questions
+make eval         # scores ripgrep and chronicle on the same questions
+```
 
-**Chronicle does not replace Hindsight and must not flood it.** The `personal`
-bank is already at 2,726 facts and times out on `sync_retain`; piping ~50k
-segments of extracted facts into it would 40× the bank and make `recall`
-useless.
+Write the questions from memory, not by browsing the archive: a question
+written after reading the answer is one you already know is findable.
 
-Two narrow flows instead:
-
-- **`ground` (Chronicle → answer), every recall.** Hindsight facts are
-  unsourced assertions. Chronicle attaches the conversations behind them —
-  including ones that contradict. This replaces time-based staleness rules
-  (ticket >14d, finance >30d) with a measurement.
-- **Promotion (Chronicle → Hindsight), rare.** `v_promotable_facts` requires
-  support across ≥3 segments **and** ≥2 threads at confidence ≥0.7. Target
-  hundreds per year. Watch `get_bank_stats` after each run.
+On the reference deployment (37 questions, 2026-09-26), chronicle scores
+**63.5%** against ripgrep's **62.8%** — level with grep, not yet clearly ahead,
+and grep's keywords were written by someone who had seen the answers. The
+remaining misses are vocabulary mismatch: the answer never uses the question's
+words.
 
 ## Architecture
 
@@ -135,7 +160,7 @@ sources ──► adapters ──► event (immutable, partitioned by year)
                             │
                             ▼
                      SEGMENTATION            per-thread fitted time gap
-                     681k ──► ~50k           + caps + reply-edge anchors
+                     681k ──► ~51k           + caps + reply-edge anchors
                             │
                             ▼
                      segment                 raw_text (returned)
@@ -145,72 +170,65 @@ sources ──► adapters ──► event (immutable, partitioned by year)
                      one system              tsvector + trgm + B-tree
                             │
                             ▼
-                     MCP ──► agent-runner ──► tg-assistant
+                     api + MCP ──► your assistant
 ```
 
-Everything is in one PostgreSQL. At ~50k segments for one user, ANN solves a
-problem that doesn't exist: exact cosine over ~123 MB is single-digit ms, and
-it keeps every date filter exact — sidestepping the HNSW percolation failure
-that bites hardest at the ~1%-cardinality date ranges you query most.
+`raw_text` is what a hit returns; `embed_text` is what gets indexed. Calendar
+rollups are views, not tables, because summarising a summary is how archives
+rot.
 
-## Quick start
+## Running it
+
+- **PostgreSQL 16 with pgvector ≥ 0.7** — `halfvec` does not exist in 0.6. The
+  pinned `pgvector/pgvector:pg16` image is fine; a distro package may not be.
+- **Memory.** api 2.5 GB, db 2 GB, resident. The worker needs 8 GB **while it
+  runs** and exits when done, so it is scheduled, not resident.
+- **Throughput.** On the reference host (16 contended CPU cores) the first
+  embed of 51k segments took ~9.8 h; a warm `recall` takes ~0.4 s.
+
+## Pairing with a curated memory
+
+Chronicle is an evidence layer: everything, sourced, uncurated. A curated
+memory such as [Hindsight](https://github.com/vectorize-io/hindsight) is the
+opposite: few facts, chosen deliberately, no evidence trail. They compose
+through two narrow flows. `ground` attaches the real conversations behind a
+curated claim on every recall. Promotion goes the other way rarely:
+`v_promotable_facts` requires support across ≥3 segments **and** ≥2 threads at
+confidence ≥0.7, because piping every extracted fact into a curated store
+drowns it.
+
+## Development
 
 ```bash
-git clone <this repo> chronicle && cd chronicle
-make test                     # 68 unit tests; bootstraps .venv, no DB or models
-cp .env.example .env          # fill in, then `make encrypt STACK=chronicle` in homelab
-make smoke                    # migrations + every SQL function, throwaway DB
-
-make doctor                   # ← ALWAYS. validates sources before you ingest
-make doctor-homelab TIER=2    # ← the real one: sources live ON the box
-make ingest                   # sources -> event -> segment -> embedding
-make eval-init && make eval   # chronicle vs ripgrep, on your questions
+make test     # 110 unit tests; no database, no models
+make smoke    # every migration and SQL function, plus three integration tests, against real PostgreSQL
+make lint
 ```
 
-### `make doctor` is not optional
-
-Two adapter assumptions were already wrong on first contact — wakapi is SQLite
-not Postgres, firefly is MariaDB with amounts on `transactions` — and each
-would have surfaced hours into a backfill, after the worker had written wrong
-rows. Doctor finds that class of problem in ~10 seconds, read-only.
-
-It checks: driver reachability, timestamps that are actually datetimes (SQLite
-returns TEXT), ascending order, duplicate ids, unaggregated telemetry, empty
-narrative text, degenerate `thread_key`, and import-time-masquerading-as-
-event-time (the immich `createdAt` vs EXIF `dateTimeOriginal` trap). Run it
-again after upgrading any source stack — an upstream migration is exactly what
-breaks an adapter quietly.
-
-Deploy: see [`docs/DEPLOY.md`](docs/DEPLOY.md). Short version — clone into
-`/srv/stacks/chronicle`, resolve the `chronicle-db` digest into `PINS.md`,
-register `10.211.71.0/24` in `NETWORKS.md`, `make validate` in the homelab
-repo, then `docker compose up -d`.
-
-## Requirements
-
-- PostgreSQL 16 with **pgvector ≥ 0.7** — `halfvec` does not exist in 0.6.
-  The pinned `pgvector/pgvector:pg16` image is fine; a distro `postgresql-16-pgvector`
-  package may not be.
-- ~2.5 GB resident (api + db). The worker is `restart: "no"` and needs 8 GB
-  **while it runs** — the box is 32 GB with 61.4 GB of `mem_limit` committed
-  and has hit 96% swap, so it is scheduled, not resident.
+Before committing, enable the hooks: `git config core.hooksPath .githooks`,
+then copy `.private-terms.example` to `.private-terms` and list what must never
+appear here. The hooks block private terms in files and commit messages, run
+gitleaks, and require a GitHub noreply address; CI checks the same.
 
 ## Status
 
 Working: segmentation, gap fitting, cross-script entity resolution, intent
-routing, RRF fusion, bi-temporal facts with deterministic conflict resolution,
-the full schema, the source-policy layer, 18 adapters across 5 storage shapes,
-MCP tool surface.
+routing, RRF fusion, bi-temporal facts, the source policy layer, 18 adapters,
+doctor, the worker, the API, the MCP server, the evaluation harness and the
+erasure path. Every database-backed adapter has run against its real
+application's database on the reference deployment.
 
-The SQL-backed adapters (telegram, wakapi, dawarich, immich, paperless,
-firefly, karakeep, miniflux, forgejo) carry real queries against real schemas
-but have only been run against fixtures — verify each one against your data
-before trusting its output. The API adapters take an injected `fetch_page`
-callable and need wiring to the corresponding MCP tool.
+Not done: the API adapters need a client wired in; enrichment works but stays
+off until an A/B shows it helps; retrieval is level with grep, not ahead of it.
 
-Stubbed: only `worker.py enrich` — the local-LLM pass for summaries, topics and
-facts. Everything else runs. Enrichment is deliberately last: retrieval works
-without it, so ship and measure before spending weeks of CPU there.
+## Security and privacy
 
-Tested: 57 unit tests, plus migrations and every SQL function exercised
-against real PostgreSQL 16 + pgvector 0.8.0 in CI.
+A chat archive holds other people's words as well as yours, and chronicle's
+database is the most sensitive data on the host. See [SECURITY.md](SECURITY.md)
+for what to report and how. You are responsible for following the privacy laws
+where you run it.
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). Not affiliated with
+or endorsed by Telegram or any service it reads.
