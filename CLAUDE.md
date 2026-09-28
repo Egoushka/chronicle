@@ -92,7 +92,7 @@ each adapter's `excluded_thread_keys()` now excludes but a laxer rule already
 indexed. Dry-run by default. Every run writes an
 `erasure_log` row.
 
-**Tested:** 117 unit tests; `make smoke` runs every migration and SQL
+**Tested:** 120 unit tests; `make smoke` runs every migration and SQL
 function plus four integration tests against a real PostgreSQL —
 purge-itest, tally-itest, worker-itest (the pipeline run five times), and
 resegment-itest. CI
@@ -141,7 +141,7 @@ paths.
 ## Commands
 
 ```bash
-make test                 # 117 unit tests; bootstraps .venv, no DB or models
+make test                 # 120 unit tests; bootstraps .venv, no DB or models
 make smoke                # migrations + every SQL function, throwaway DB
 make doctor               # validate sources BEFORE ingesting  ← always first
 make ingest               # sources -> event -> segment -> embedding
