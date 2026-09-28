@@ -1,0 +1,8 @@
+# Copy to .private-terms (gitignored). One extended regex per line, matched
+# case-insensitively against every staged file. Lines starting with # are ignored.
+# List what must never appear in this public repo: your hostnames, IP ranges,
+# key aliases, employer and client names, usernames, home-directory paths.
+my-server\.example\.com
+192\.168\.
+/home/yourname/
+sk-[A-Za-z0-9_-]{16,}

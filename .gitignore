@@ -8,3 +8,17 @@ __pycache__/
 .venv/
 models/
 *.egg-info/
+
+# graft keeps its index and telemetry cache here, and writes .ignore so ripgrep
+# still searches them; both are regenerated per machine.
+graft/
+.ignore
+
+# The deployment's own source wiring; compose.sources.example.yaml is the template.
+compose.override.yaml
+
+# Private, never committed: the denylist the hooks read, personal agent notes,
+# and the eval set — real questions about a real archive, keyed by message id.
+.private-terms
+CLAUDE.local.md
+eval/questions.json

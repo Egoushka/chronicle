@@ -1,14 +1,23 @@
 name: ci
-on: [push, pull_request]
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version: "3.12" }
       - run: pip install pytest numpy ruff
+      # bash -n: a quote inside ${VAR:?message} once broke two scripts silently.
+      - run: for f in scripts/*.sh .githooks/*; do bash -n "$f"; done
       - run: PYTHONPATH=. python -m pytest tests/ -q
       - run: ruff check chronicle/ tests/ || true
 
@@ -24,10 +33,34 @@ jobs:
           --health-timeout 5s --health-retries 5
         ports: ["5432:5432"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: sudo apt-get update && sudo apt-get install -y postgresql-client
       # scripts/*-itest.py, run by smoke.sh. numpy: worker-itest imports segment.py.
       - run: pip install 'psycopg[binary]' httpx numpy
       - name: apply migrations and smoke-test every function
         env: { PGPASSWORD: postgres, PGHOST: localhost, PGUSER: postgres }
         run: ./scripts/smoke.sh
+
+  secrets:
+    runs-on: ubuntu-latest
+    # On pull requests gitleaks-action lists the PR's commits through the API.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Prints short hashes only: echoing the offending address would publish it in the log.
+      - name: Every commit uses a GitHub noreply address
+        run: |
+          bad=$(git log --format='%h %ae%n%h %ce' \
+            | grep -vE ' ([^ @]+@users\.noreply\.github\.com|noreply@github\.com)$' || true)
+          if [ -n "$bad" ]; then
+            echo "Commits with an address that is not a GitHub noreply one:"
+            echo "$bad" | cut -d' ' -f1 | sort -u
+            exit 1
+          fi

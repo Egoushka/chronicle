@@ -1,0 +1,52 @@
+#!/bin/sh
+# 1. Identity: author and committer must be a GitHub noreply address. A repo-level user.email
+#    once put a work address on every commit of a private predecessor of these repos.
+# 2. Denylist: blocks the commit if any staged file matches a term in .private-terms.
+# 3. Secret scan: gitleaks over the staged changes.
+# .private-terms is gitignored: one extended regex per line, case-insensitive, # for comments.
+set -eu
+
+root=$(git rev-parse --show-toplevel)
+terms="$root/.private-terms"
+
+for ident in "$(git var GIT_AUTHOR_IDENT)" "$(git var GIT_COMMITTER_IDENT)"; do
+  case "$ident" in
+    *'@users.noreply.github.com>'*) ;;
+    *) echo "pre-commit: user.email is not a users.noreply.github.com address." >&2; exit 1 ;;
+  esac
+done
+
+if [ ! -f "$terms" ]; then
+  echo "pre-commit: .private-terms is missing. Copy .private-terms.example and fill it in." >&2
+  exit 1
+fi
+
+patterns=$(mktemp)
+trap 'rm -f "$patterns"' EXIT
+grep -vE '^[[:space:]]*(#|$)' "$terms" > "$patterns" || true
+
+# Whole index, not just this commit's diff: a term that slipped in earlier blocks too.
+# git grep exits 1 for no match and >1 for an error such as a malformed pattern; an error must
+# block the commit, not read as "clean".
+if [ -s "$patterns" ]; then
+  status=0
+  hits=$(git grep --cached -n -I -i -E -f "$patterns") || status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "pre-commit: private terms found in staged content:" >&2
+    echo "$hits" >&2
+    echo "Remove them. Don't bypass with --no-verify." >&2
+    exit 1
+  elif [ "$status" -gt 1 ]; then
+    echo "pre-commit: git grep failed ($status); is a pattern in .private-terms malformed?" >&2
+    exit 1
+  fi
+fi
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks is not installed (https://github.com/gitleaks/gitleaks)." >&2
+  exit 1
+fi
+gitleaks git --staged --redact --no-banner -v >/dev/null || {
+  echo "pre-commit: gitleaks found a secret in staged changes (rerun: gitleaks git --staged -v)." >&2
+  exit 1
+}

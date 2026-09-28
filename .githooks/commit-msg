@@ -1,0 +1,23 @@
+#!/bin/sh
+# Runs the .private-terms denylist over the commit message. File content is not the only place a
+# private detail lands: health readings and host names have leaked through commit messages before.
+set -eu
+
+terms="$(git rev-parse --show-toplevel)/.private-terms"
+if [ ! -f "$terms" ]; then
+  echo "commit-msg: .private-terms is missing. Copy .private-terms.example and fill it in." >&2
+  exit 1
+fi
+
+patterns=$(mktemp)
+trap 'rm -f "$patterns"' EXIT
+grep -vE '^[[:space:]]*(#|$)' "$terms" > "$patterns" || true
+[ -s "$patterns" ] || exit 0
+
+status=0
+grep -v '^#' "$1" | grep -n -i -E -f "$patterns" >&2 || status=$?
+case "$status" in
+  0) echo "commit-msg: private terms in the commit message (lines above)." >&2; exit 1 ;;
+  1) exit 0 ;;
+  *) echo "commit-msg: grep failed ($status); is a pattern in .private-terms malformed?" >&2; exit 1 ;;
+esac
