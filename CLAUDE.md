@@ -84,9 +84,10 @@ each adapter's `excluded_thread_keys()` now excludes but a laxer rule already
 indexed. Dry-run by default. Every run writes an
 `erasure_log` row.
 
-**Tested:** 110 unit tests; `make smoke` runs every migration and SQL
-function plus three integration tests against a real PostgreSQL —
-purge-itest, tally-itest, and worker-itest (the pipeline run five times). CI
+**Tested:** 117 unit tests; `make smoke` runs every migration and SQL
+function plus four integration tests against a real PostgreSQL —
+purge-itest, tally-itest, worker-itest (the pipeline run five times), and
+resegment-itest. CI
 runs both, plus `bash -n` on every script, gitleaks, and a check that every
 commit uses a noreply address.
 
@@ -132,12 +133,13 @@ paths.
 ## Commands
 
 ```bash
-make test                 # 110 unit tests; bootstraps .venv, no DB or models
+make test                 # 117 unit tests; bootstraps .venv, no DB or models
 make smoke                # migrations + every SQL function, throwaway DB
 make doctor               # validate sources BEFORE ingesting  ← always first
 make ingest               # sources -> event -> segment -> embedding
 ./scripts/nightly.sh      # ON THE BOX: what cron runs — all stages, tier 2
 make eval-init && make eval   # chronicle vs ripgrep on real questions
+make resegment CAP=15 THREADS="$(make -s eval-threads)"   # a cap sweep's rebuild
 make purge-excluded       # what the filters now exclude but already indexed
 make purge-excluded APPLY=1   # ...and delete it, in one transaction
 ```
@@ -150,6 +152,9 @@ the only test that can catch facts 29-31 and it has caught two of them.
 telegram fixture and a stub LLM: re-runs create nothing, conversations extend
 across runs, transcripts reach segments, enrich replaces rather than
 accumulates, a dead endpoint stops after one batch. Facts 37-38 live there.
+`scripts/resegment-itest.py` rebuilds threads at a new cap under facts,
+commitments and citations (fact 31 again, from the other side), and pins the
+reply-edge rule (fact 48).
 
 Requires PostgreSQL 16 + **pgvector ≥ 0.7** — `halfvec` does not exist in 0.6.
 The distro `postgresql-16-pgvector` package may ship 0.6; the pinned
@@ -451,6 +456,22 @@ named after one starts failing, the fix is being undone.
    applies it unless the caller set dates. It also makes those queries 3-4x
    faster (the dense scan shrinks). Two different years -> no window: a
    window that excludes the answer is worse than none.
+48. **The reply-edge rule never ran.** `segment_chat` suppresses a split when
+   a reply points back into the open segment, and the worker built every
+   Event with `reply_to_id=None`, so none of the 7.9% of messages carrying a
+   reply ever did. `event.reply_to` and `event.source_id` are both
+   `{chat}:{msg}` for telegram and join directly. A rule with no caller looks
+   exactly like a rule that works — `resegment-itest` fails if it goes dark.
+49. **Score p@1 in the unit the system retrieves.** The harness flattened
+   chronicle's ranked segments into one id list and asked whether the FIRST
+   EVENT was gold — false for nearly every ~13-event segment even when it
+   ranked first and held the answer. 11.8% flattened vs 29.4% by segment on
+   17 lookups, retrieval unchanged. Fact 28 one level up.
+50. **Telegram's service account (777000) is not a bot to either signal.**
+   Username `telegram`, never tagged `chat:bot`, so it survived the bot purge:
+   192 events averaging 299 chars, and it owned the earliest match of an eval
+   first_mention term. It has a rule of its own in the adapter and in
+   `excluded_thread_keys`.
 
 ## Design rules that are not negotiable
 

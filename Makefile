@@ -1,4 +1,7 @@
-.PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab purge-excluded eval-homelab
+# eval/ is a DIRECTORY, so without .PHONY `make eval` finds it, decides the
+# target is up to date and does nothing — silently, exit 0.
+.PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab purge-excluded \
+        eval eval-init eval-threads eval-homelab resegment
 
 VENV  := .venv
 TOOLS := $(VENV)/bin/pytest
@@ -81,6 +84,19 @@ eval-init: ## write the question template you must fill in by hand
 
 eval:      ## chronicle vs ripgrep on your own questions
 	python3 -m chronicle.evaluate compare
+
+eval-threads: ## the thread keys the eval's gold lives in — a resegment sweep's scope
+	@python3 -m chronicle.evaluate threads
+
+# Rebuilds only the named threads, at CAP events per segment; their segments
+# lose their embeddings, so `embed` must run before the next eval. Runs in the
+# worker on a deployment, like every other stage:
+#   docker compose --profile batch run --rm chronicle-worker \
+#       python -m chronicle.worker resegment --max-messages 15 --thread telegram:123 ...
+resegment: ## rebuild named THREADS at CAP events per segment (see eval-threads)
+	@test -n "$(THREADS)" || { echo "set THREADS (see make eval-threads)"; exit 1; }
+	python3 -m chronicle.worker resegment --max-messages $(or $(CAP),30) \
+	  $(foreach t,$(THREADS),--thread $(t))
 
 eval-homelab: ## make eval ON THE BOX — the dump is the whole archive and stays there
 	ssh "$${CHRONICLE_DOCTOR_HOST:?set CHRONICLE_DOCTOR_HOST}" \
