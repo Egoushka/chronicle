@@ -51,7 +51,7 @@ class ImmichAdapter(SqlAdapter):
             WHERE a."deletedAt" IS NULL
               -- `hidden` is the video half of a live photo, which would
               -- double-count the moment; `locked` is the Locked Folder,
-              -- which Yehor hid from immich's own timeline on purpose.
+              -- which the owner hid from immich's own timeline on purpose.
               AND a.visibility::text NOT IN ('hidden', 'locked')
               -- Cast every nullable bound (hard-won fact 16): a bare
               -- placeholder in `IS NULL` is planned as `unknown` and the next

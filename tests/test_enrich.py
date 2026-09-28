@@ -1,7 +1,8 @@
 """enrich.clean — the model's reply is untrusted input to a bi-temporal table."""
 from datetime import date
 
-from chronicle.enrich import MAX_FACTS, OWNER, PROMPT, clean, fact_line
+from chronicle import enrich
+from chronicle.enrich import MAX_FACTS, PROMPT, _owner_from_env, clean, fact_line
 
 PREDICATES = {"lives_in", "plans", "likes"}
 
@@ -16,10 +17,24 @@ def test_unknown_predicate_drops_the_fact_instead_of_inventing_one():
     assert [(f["predicate"], f["object"]) for f in out["facts"]] == [("lives_in", "Lviv")]
 
 
-def test_owner_aliases_collapse_to_one_subject():
+def test_owner_comes_from_the_environment():
+    owner, aliases = _owner_from_env({"CHRONICLE_OWNER": "Sam",
+                                      "CHRONICLE_OWNER_ALIASES": " Сэм , Sam Doe,,"})
+    assert owner == "Sam"
+    assert {"me", "sam", "сэм", "sam doe"} <= aliases and "" not in aliases
+
+
+def test_owner_still_has_a_name_and_me_when_unset():
+    owner, aliases = _owner_from_env({})
+    assert owner.strip() and "me" in aliases
+
+
+def test_owner_aliases_collapse_to_one_subject(monkeypatch):
+    monkeypatch.setattr(enrich, "OWNER", "Sam")
+    monkeypatch.setattr(enrich, "_OWNER_ALIASES", frozenset({"me", "sam", "сэм"}))
     out = clean({"facts": [{"subject": s, "predicate": "likes", "object": "x"}
-                           for s in ("me", "Егор", "Yehor", "Anna")]}, PREDICATES)
-    assert [f["subject"] for f in out["facts"]] == [OWNER, OWNER, OWNER, "Anna"]
+                           for s in ("me", "Сэм", " SAM ", "Anna")]}, PREDICATES)
+    assert [f["subject"] for f in out["facts"]] == ["Sam", "Sam", "Sam", "Anna"]
 
 
 def test_numbers_are_clamped_and_garbage_defaults():
@@ -62,4 +77,4 @@ def test_fact_line_reads_as_text():
 
 def test_prompt_formats():
     # Literal JSON braces in the template must be escaped for str.format.
-    PROMPT.format(predicates="a, b", chat="c", date="d", text="t")
+    PROMPT.format(predicates="a, b", chat="c", owner="o", date="d", text="t")

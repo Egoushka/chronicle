@@ -20,10 +20,12 @@
 #
 # Teardown when you are done — /tmp on that box is tmpfs, i.e. RAM, and the box
 # runs 61.4 GB of committed mem_limit on 32 GB:
-#   ssh homelab 'rm -rf /tmp/chronicle-doctor'
+#   ssh "$CHRONICLE_DOCTOR_HOST" 'rm -rf /tmp/chronicle-doctor'
 set -euo pipefail
 
-HOST="${CHRONICLE_DOCTOR_HOST:-homelab}"
+# Where the box is and where its stacks live. Set both in your environment.
+HOST="${CHRONICLE_DOCTOR_HOST:?set CHRONICLE_DOCTOR_HOST to the ssh host of the box}"
+STACKS="${CHRONICLE_STACKS:?set CHRONICLE_STACKS to the stacks directory on the box}"
 DIR=/tmp/chronicle-doctor
 
 tar czf - chronicle | ssh "$HOST" "mkdir -p $DIR && tar xzf - -C $DIR"
@@ -47,23 +49,29 @@ umask 077
 ENVF=\$(mktemp $DIR/env.XXXXXX)
 trap 'rm -f \$ENVF' EXIT
 
-DAWARICH_PW=\$(grep -E '^DAWARICH_DB_PASSWORD=' /srv/stacks/dawarich/.env | cut -d= -f2- || true)
-IMMICH_USER=\$(grep -E '^DB_USERNAME=' /srv/stacks/immich/.env | cut -d= -f2- || true)
-IMMICH_PW=\$(grep -E '^DB_PASSWORD=' /srv/stacks/immich/.env | cut -d= -f2- || true)
-IMMICH_DB=\$(grep -E '^DB_DATABASE_NAME=' /srv/stacks/immich/.env | cut -d= -f2- || true)
-PAPERLESS_PW=\$(grep -E '^POSTGRES_PASSWORD=' /srv/stacks/paperless/.env | cut -d= -f2- || true)
-MINIFLUX_PW=\$(grep -E '^MF_DB_PASSWORD=' /srv/stacks/miniflux/.env | cut -d= -f2- || true)
-LASTFM_KEY=\$(grep -E '^LASTFM_API_KEY=' /opt/homelab/.ingest-secrets | cut -d= -f2- || true)
-LASTFM_U=\$(grep -E '^LASTFM_USER=' /opt/homelab/.ingest-secrets | cut -d= -f2- || true)
-. /srv/stacks/firefly/.env   # DB_USERNAME / DB_PASSWORD / DB_DATABASE
+DAWARICH_PW=\$(grep -E '^DAWARICH_DB_PASSWORD=' $STACKS/dawarich/.env | cut -d= -f2- || true)
+IMMICH_USER=\$(grep -E '^DB_USERNAME=' $STACKS/immich/.env | cut -d= -f2- || true)
+IMMICH_PW=\$(grep -E '^DB_PASSWORD=' $STACKS/immich/.env | cut -d= -f2- || true)
+IMMICH_DB=\$(grep -E '^DB_DATABASE_NAME=' $STACKS/immich/.env | cut -d= -f2- || true)
+PAPERLESS_PW=\$(grep -E '^POSTGRES_PASSWORD=' $STACKS/paperless/.env | cut -d= -f2- || true)
+MINIFLUX_PW=\$(grep -E '^MF_DB_PASSWORD=' $STACKS/miniflux/.env | cut -d= -f2- || true)
+# Per-user ids, and where Last.fm's key lives, come from chronicle's own .env on
+# the box — the same values scripts/nightly.sh runs with.
+WAKAPI_U=\$(grep -E '^WAKAPI_USER=' $STACKS/chronicle/.env | cut -d= -f2- || true)
+DAWARICH_UID=\$(grep -E '^DAWARICH_USER_ID=' $STACKS/chronicle/.env | cut -d= -f2- || true)
+SECRETS=\$(grep -E '^INGEST_SECRETS_FILE=' $STACKS/chronicle/.env | cut -d= -f2- || true)
+LASTFM_KEY=\$(grep -E '^LASTFM_API_KEY=' \"\${SECRETS:-$STACKS/chronicle/.env}\" | cut -d= -f2- || true)
+LASTFM_U=\$(grep -E '^LASTFM_USER=' \"\${SECRETS:-$STACKS/chronicle/.env}\" | cut -d= -f2- || true)
+DB_USERNAME= DB_PASSWORD= DB_DATABASE=   # set -u: firefly may not be there
+[ ! -f $STACKS/firefly/.env ] || . $STACKS/firefly/.env   # DB_USERNAME / DB_PASSWORD / DB_DATABASE
 
 cat >\$ENVF <<EOF
 PYTHONPATH=/app/vendor
 TELEGRAM_DB_URL=/srv/telegram/telegram.db
 WAKAPI_DB_PATH=/srv/wakapi/wakapi.db
-WAKAPI_USER=${WAKAPI_USER:-Yehor}
+WAKAPI_USER=\$WAKAPI_U
 DAWARICH_DB_URL=postgresql://dawarich:\$DAWARICH_PW@dawarich_db:5432/dawarich
-DAWARICH_USER_ID=${DAWARICH_USER_ID:-2}
+DAWARICH_USER_ID=\$DAWARICH_UID
 FIREFLY_DB_URL=mysql://\$DB_USERNAME:\$DB_PASSWORD@firefly-db:3306/\$DB_DATABASE
 LASTFM_API_KEY=\$LASTFM_KEY
 LASTFM_USER=\$LASTFM_U
@@ -81,7 +89,7 @@ docker run --rm \
   --network immich_default \
   --network paperless_default \
   --network miniflux_default \
-  -v /srv/stacks/telegram-sync/data:/srv/telegram \
+  -v $STACKS/telegram-sync/data:/srv/telegram \
   -v /var/lib/docker/volumes/wakapi_wakapi_data/_data:/srv/wakapi:ro \
   -v /var/lib/docker/volumes/karakeep_karakeep_data/_data:/srv/karakeep:ro \
   -v $DIR:/app -w /app \

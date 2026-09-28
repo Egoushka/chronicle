@@ -14,9 +14,9 @@ mounts them; chronicle-api inherits TELEGRAM_DB_URL from env_file, has no
 /srv/telegram, and dies on `unable to open database file`.
 
 The first real use was the bot chats: `personal_only` never kept them out
-(hard-won fact 27), and @examplejarvisbot had 138 events and 21 embedded
+(hard-won fact 27), and the assistant's own bot chat had 138 events and 21 embedded
 segments in the live database before JARVIS existed — an assistant reading its
-own prior output back as external memory about Yehor.
+own prior output back as external memory about the owner.
 
 Why a target and not a one-off DELETE: exclusion rules change. They changed
 once already, they will change again, and re-running an erasure should be

@@ -34,7 +34,7 @@ _client = httpx.AsyncClient(base_url=API, timeout=120.0)
 async def recall(query: str, date_from: str | None = None,
                  date_to: str | None = None, source: str | None = None,
                  limit: int = 20) -> str:
-    """Search Yehor's life archive by meaning AND keyword (hybrid + rerank).
+    """Search the owner's life archive by meaning AND keyword (hybrid + rerank).
 
     Use for open-ended questions about what was said or happened: "what did we
     decide about the apartment", "what do I know about X". Returns segments
@@ -54,7 +54,7 @@ async def recall(query: str, date_from: str | None = None,
 
 @mcp.tool()
 async def first_mention(term: str) -> str:
-    """Find the EARLIEST time Yehor mentioned something.
+    """Find the EARLIEST time the owner mentioned something.
 
     This is an argmin over timestamp, not a similarity search — top-k
     retrieval structurally cannot answer it, because the most similar message
@@ -70,7 +70,7 @@ async def first_mention(term: str) -> str:
 
 @mcp.tool()
 async def evolution(topic: str, bin_width: str = "3 months") -> str:
-    """Trace how Yehor's view on something changed across the whole archive.
+    """Trace how the owner's view on something changed across the whole archive.
 
     Retrieves independently within each time bin so early periods are not
     crowded out by a burst of later activity, summarizes each period, and
@@ -89,8 +89,8 @@ async def tally(question: str) -> str:
     """Count, rank or aggregate over the archive using SQL.
 
     Returns the generated SQL alongside the result — always show both to
-    Yehor. Text-to-SQL is ~80% accurate even on simple schemas, so a query he
-    cannot see is a number he cannot trust.
+    the user. Text-to-SQL is ~80% accurate even on simple schemas, so a query
+    they cannot see is a number they cannot trust.
 
     Use for: "how many times did I message X in 2022", "which chat is busiest",
     "what months did I code the most".
@@ -104,8 +104,8 @@ async def tally(question: str) -> str:
 async def timeline(date_from: str, date_to: str, sources: list[str] | None = None) -> str:
     """Reconstruct what was happening in a period, across ALL sources.
 
-    This is the tool that uses more than Telegram: conversations, where he
-    was (dawarich), what he was coding (wakapi), photos, transactions. The
+    This is the tool that uses more than Telegram: conversations, where the
+    owner was (dawarich), what they were coding (wakapi), photos, transactions. The
     behavioural signals are more honest than the conversational ones because
     they are not curated.
 
@@ -119,11 +119,11 @@ async def timeline(date_from: str, date_to: str, sources: list[str] | None = Non
 
 @mcp.tool()
 async def open_commitments(older_than_days: int = 90) -> str:
-    """Promises Yehor made that have no evidence of being kept.
+    """Promises the owner made that have no evidence of being kept.
 
     Extracted from conversation and tracked with a status lifecycle. This is
-    what turns an archive into something that acts on him rather than
-    something he has to remember to query.
+    what turns an archive into something that acts on its owner rather
+    than something they have to remember to query.
     """
     r = await _client.post("/commitments", json={"older_than_days": older_than_days})
     r.raise_for_status()

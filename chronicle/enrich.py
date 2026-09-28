@@ -27,6 +27,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from datetime import date, datetime
 
 log = logging.getLogger("chronicle.enrich")
@@ -37,27 +38,41 @@ EXTRACTOR_VERSION = "enrich-2026.09-v1"
 #: model returning 40 "facts" is hallucinating or restating every line.
 MAX_TOPICS, MAX_FACTS, MAX_COMMITMENTS = 6, 8, 4
 
-#: Yehor's own messages carry these sender names (telegram-sync writes "me"
-#: for outgoing 1:1 messages). Facts about him share one entity.
-OWNER = "Yehor"
-_OWNER_ALIASES = {"me", "i", "yehor", "yehor hrushevskyi", "егор", "єгор",
-                  "я", "егор грушевский", "єгор грушевський"}
+def _owner_from_env(env: Mapping[str, str]) -> tuple[str, frozenset[str]]:
+    """Whose archive this is: OWNER, and the sender names that mean the owner.
 
-PROMPT = """You read one excerpt of Yehor's private Telegram chats and extract \
-structured memory. Lines are "sender: text". The sender "me" is Yehor.
+    From CHRONICLE_OWNER and CHRONICLE_OWNER_ALIASES (comma-separated), so no
+    name lives in the code. The owner's messages carry any of the aliases —
+    telegram-sync writes "me" for outgoing 1:1 messages — and facts about them
+    share one entity, named OWNER. `owner_or` compares `name.strip().lower()`
+    against the aliases, so they must be stored in that form.
+    """
+    # Only "me" is built in: it is the one name telegram-sync guarantees. First
+    # person pronouns (i, я) go in the aliases where the model emits them.
+    owner = env.get("CHRONICLE_OWNER", "").strip() or "the owner"
+    names = env.get("CHRONICLE_OWNER_ALIASES", "").split(",")
+    aliases = {n.strip().lower() for n in names} | {"me", owner.lower()}
+    aliases.discard("")
+    return owner, frozenset(aliases)
+
+
+OWNER, _OWNER_ALIASES = _owner_from_env(os.environ)
+
+PROMPT = """You read one excerpt of {owner}'s private Telegram chats and extract \
+structured memory. Lines are "sender: text". The sender "me" is {owner}.
 
 Return ONE JSON object with exactly these keys:
   "summary":      1-2 sentences, in the excerpt's main language, what happened.
   "topics":       up to 6 short lowercase English topic labels.
-  "importance":   0.0-1.0, how much this would matter to Yehor a year later.
+  "importance":   0.0-1.0, how much this would matter to {owner} a year later.
   "sentiment":    -1.0 (negative) to 1.0 (positive), the overall tone.
   "facts":        durable facts stated or clearly implied, each
-                  {{"subject": person name ("Yehor" for him), "predicate": one of
+                  {{"subject": person name ("{owner}" for the owner), "predicate": one of
                   [{predicates}], "object": short value, "confidence": 0.0-1.0}}.
                   Only facts about people's lives, never about the chat itself.
   "commitments":  promises to do something later, each {{"text": what was
-                  promised, "direction": "i_owe" if Yehor promised,
-                  "owed_to_me" if someone promised Yehor, "due": "YYYY-MM-DD"
+                  promised, "direction": "i_owe" if {owner} promised,
+                  "owed_to_me" if someone promised {owner}, "due": "YYYY-MM-DD"
                   or null, "confidence": 0.0-1.0}}.
 
 Empty lists are the right answer for small talk. Do not invent.
@@ -161,7 +176,7 @@ class Client:
 
     def extract(self, chat: str, started_at: datetime, text: str,
                 predicates: list[str]) -> dict:
-        prompt = PROMPT.format(predicates=", ".join(predicates), chat=chat,
+        prompt = PROMPT.format(predicates=", ".join(predicates), chat=chat, owner=OWNER,
                                date=f"{started_at:%Y-%m-%d %A}", text=text[:8000])
         body = {"model": self.model, "temperature": 0,
                 "response_format": {"type": "json_object"},

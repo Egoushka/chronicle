@@ -3,7 +3,7 @@
 # evidence ids already formatted.
 #
 #   ./scripts/eval-candidates.sh 'квартир'
-#   ./scripts/eval-candidates.sh 'AcmeBE|acme' 20
+#   ./scripts/eval-candidates.sh 'відпустк|отпуск' 20
 #
 # WHY THIS EXISTS, AND WHY IT DOES NOT WRITE THE QUESTIONS
 #
@@ -28,9 +28,10 @@ set -euo pipefail
 
 PATTERN="${1:?usage: eval-candidates.sh <regex> [limit]}"
 LIMIT="${2:-10}"
-HOST="${CHRONICLE_DOCTOR_HOST:-homelab}"
+HOST="${CHRONICLE_DOCTOR_HOST:?set CHRONICLE_DOCTOR_HOST to the ssh host of the box}"
+STACKS="${CHRONICLE_STACKS:?set CHRONICLE_STACKS to the stacks directory on the box}"
 
-ssh "$HOST" "cd /srv/stacks/chronicle && docker compose exec -T chronicle-db \
+ssh "$HOST" "cd $STACKS/chronicle && docker compose exec -T chronicle-db \
   psql -U chronicle -d chronicle -tAF'|' -c \"
     SELECT segment_id,
            started_at::date,

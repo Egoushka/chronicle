@@ -19,7 +19,7 @@ CREATE INDEX IF NOT EXISTS segment_source_events_idx
 -- The closed vocabulary `enrich` may emit. A free-text predicate would make
 -- resolve_fact_conflicts() useless: `lives_in`, `lives in`, `moved_to` and
 -- `city` would be four predicates, none ever superseding another, and every
--- address Yehor ever had would read as current. Extend here, not in a prompt.
+-- address the owner ever had would read as current. Extend here, not in a prompt.
 INSERT INTO fact_predicate (predicate, description, single_valued) VALUES
     ('lives_in',        'city or country of residence',                TRUE),
     ('works_at',        'employer or company',                        TRUE),

@@ -94,7 +94,7 @@ class Telegram:
 #  an OpenAI-compatible stub for enrich
 # ---------------------------------------------------------------------------
 
-REPLY = {"summary": "Anna and Yehor planned the move to Lviv.",
+REPLY = {"summary": "Anna and Sam planned the move to Lviv.",
          "topics": ["relocation", "Apartment", "relocation"],
          "importance": 3, "sentiment": 0.4,
          "facts": [{"subject": "Anna", "predicate": "lives_in", "object": "Lviv",
@@ -148,7 +148,7 @@ def run() -> int:
     srv = HTTPServer(("127.0.0.1", 0), Stub)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     os.environ.update(TELEGRAM_DB_URL=tg.path, CHRONICLE_DB_URL=URL,
-                      ENRICH_MODEL="stub", LITELLM_API_KEY="k",
+                      ENRICH_MODEL="stub", LITELLM_API_KEY="k", CHRONICLE_OWNER="Sam",
                       ENRICH_URL=f"http://127.0.0.1:{srv.server_port}/v1")
 
     from chronicle import worker
@@ -224,8 +224,8 @@ def run() -> int:
     check("enrich: both segments sent", Stub.calls, 2)
     check("enrich: unknown predicate dropped, 2 facts per segment",
           q("SELECT count(*) FROM fact")[0][0], 4)
-    check("enrich: 'me' resolves to Yehor",
-          q("SELECT count(*) FROM entity WHERE canonical_name = 'Yehor'")[0][0], 1)
+    check("enrich: 'me' resolves to the owner",
+          q("SELECT count(*) FROM entity WHERE canonical_name = 'Sam'")[0][0], 1)
     check("enrich: single-valued lives_in, only the newest is current",
           q("""SELECT count(*) FROM fact WHERE predicate = 'lives_in'
                   AND t_invalid IS NULL""")[0][0], 1)

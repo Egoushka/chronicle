@@ -91,9 +91,9 @@ POLICIES: list[SourcePolicy] = [
         "typed) this knows what you finished.",
     ),
     SourcePolicy(
-        "jira", Density.DISCRETE, Tier.BEHAVIOUR, "acme",
-        "ACME ticket transitions are a precise work timeline.",
-        "Routes to the `acme` bank, not `work` — day-to-day delivery is a "
+        "jira", Density.DISCRETE, Tier.BEHAVIOUR, "employer",
+        "Day-job ticket transitions are a precise work timeline.",
+        "Routes to an `employer` bank, not `work` — day-to-day delivery is a "
         "different bank from career.",
     ),
 
@@ -136,7 +136,7 @@ POLICIES: list[SourcePolicy] = [
         "attached to something you wrote.",
     ),
     SourcePolicy(
-        "slack", Density.NARRATIVE, Tier.ARTIFACT, "acme",
+        "slack", Density.NARRATIVE, Tier.ARTIFACT, "employer",
         "Work conversation. Segments like Telegram.",
         "Contains colleagues' words. Keep local; never promote quotes.",
     ),

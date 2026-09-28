@@ -8,8 +8,8 @@ Evidence (SeCom, ICLR 2025 — LoCoMo GPT4Score by memory unit):
     session-level  63.16
     summaries      53.87-56.25   <- worst. Do not build a summary pyramid.
 
-Those numbers are at ~30 tokens/turn. Yehor's median Telegram message is
-~14 characters, so the gap is larger, not smaller.
+Those numbers are at ~30 tokens/turn. The reference archive's median
+Telegram message is ~14 characters, so the gap is larger, not smaller.
 
 Signals used, in order of reliability:
     1. adaptive time gap   deterministic, free, 100% reliable as a boundary

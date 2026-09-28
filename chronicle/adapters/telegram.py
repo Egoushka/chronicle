@@ -106,7 +106,7 @@ class TelegramAdapter(SqlAdapter):
         # tg-assistant, agent-runner and hindsight at the STACK level; without
         # the same rule at the ROW level, an assistant's own Telegram chat flows
         # telegram-sync -> chronicle -> back to the assistant through chronicle's
-        # MCP, and it reads its own output as external memory about Yehor.
+        # MCP, and it reads its own output as external memory about the owner.
         #
         # Bot chats are 0.81% of rows but 11.3% of messages over 200 chars
         # (they average 151.6 chars against 27.8 for everything else), so in the
@@ -178,8 +178,8 @@ class TelegramAdapter(SqlAdapter):
                     source_id=f"{chat_id}:{msg_id}",
                     ts=ts,
                     text=text or "",
-                    # One name for Yehor. telegram-sync writes "me" for an
-                    # outgoing message on its backfill path and his display
+                    # One name for the owner. telegram-sync writes "me" for an
+                    # outgoing message on its backfill path and their display
                     # name on the live path, so 7,781 of 407,650 sent messages
                     # carried a second identity (2026-09-26) — into segment
                     # headers and into entity mention counts.

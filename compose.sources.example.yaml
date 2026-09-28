@@ -1,0 +1,40 @@
+## Source wiring for a host where each source runs as its own Compose stack
+## beside this one: telegram-sync, wakapi, dawarich, firefly, litellm.
+## Copy to compose.override.yaml — Compose merges that file automatically and
+## it is gitignored — then delete whatever you do not run. Stack, network and
+## volume names below are those projects' Compose defaults.
+services:
+  chronicle-worker:
+    volumes:
+      # telegram-sync is SQLite, not Postgres — /data/telegram.db in that
+      # stack. The adapter opens it with a `mode=ro` URI, so SQLite itself
+      # refuses every write; the mount is deliberately NOT `:ro` because the
+      # file is in WAL mode and WAL needs to create a -shm file for locking
+      # even on a read-only connection. With `:ro` the open fails outright:
+      # "unable to open database file".
+      # Relative to compose.yaml: telegram-sync is a sibling stack.
+      - ../telegram-sync/data:/srv/telegram
+      # wakapi is SQLite too, on its own stack's volume. journal_mode=delete
+      # there, so `:ro` is fine.
+      - wakapi_data:/srv/wakapi:ro
+    # The source networks give read access to databases that publish no host
+    # port: dawarich_db (tier 1) and firefly-db (tier 2). `litellm` resolves
+    # only on its own network.
+    networks: [default, dawarich_net, firefly_net, litellm_net]
+
+networks:
+  dawarich_net:
+    external: true
+    name: dawarich_default
+  firefly_net:
+    external: true
+    name: firefly_default
+  litellm_net:
+    external: true
+    name: litellm_default
+
+volumes:
+  # Owned by the wakapi stack; chronicle only reads it.
+  wakapi_data:
+    external: true
+    name: wakapi_wakapi_data

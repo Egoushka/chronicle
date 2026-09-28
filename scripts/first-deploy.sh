@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # First deploy of the chronicle stack. RUN THIS ON THE BOX, as root.
 #
-#   ssh homelab
-#   cd /srv/stacks/chronicle && ./scripts/first-deploy.sh
+#   ssh <box>
+#   cd <stacks>/chronicle && ./scripts/first-deploy.sh
+#
+# The other stacks are this checkout's siblings: ../dawarich, ../telegram-sync.
 #
 # It is idempotent: every step checks before acting, so re-running after a
 # failure resumes rather than restarts.
@@ -16,6 +18,11 @@ cd "$(dirname "$0")/.."
 say() { printf '\n\033[36m==> %s\033[0m\n' "$*"; }
 die() { printf '\n\033[31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Without the override the worker sees no source at all, and doctor would pass
+# an empty run.
+[ -f compose.override.yaml ] \
+  || die "no compose.override.yaml — copy compose.sources.example.yaml and trim it"
+
 # ---------------------------------------------------------------------------
 # 1. Secrets.
 #
@@ -24,22 +31,24 @@ die() { printf '\n\033[31mFAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 if [ ! -f .env ]; then
   say "writing .env"
-  [ -f /srv/stacks/dawarich/.env ]      || die "dawarich stack not found"
-  [ -f /srv/stacks/telegram-sync/.env ] || die "telegram-sync stack not found"
+  [ -f ../dawarich/.env ]      || die "dawarich stack not found"
+  [ -f ../telegram-sync/.env ] || die "telegram-sync stack not found"
   umask 077
   {
     echo "DB_PASSWORD=$(openssl rand -hex 24)"
     echo "LITELLM_BASE_URL=http://litellm:4000/v1"
-    grep -E '^LITELLM_API_KEY=' /srv/stacks/telegram-sync/.env
+    # chronicle's OWN virtual key. A key copied from another stack dies with
+    # that stack's next rotation, and only enrich would notice.
+    echo "LITELLM_API_KEY=${LITELLM_API_KEY:-}"
     echo "EMBED_MODEL=BAAI/bge-m3"
     echo "BATCH_SIZE=500"
     echo
     echo "TELEGRAM_DB_URL=/srv/telegram/telegram.db"
     echo "WAKAPI_DB_PATH=/srv/wakapi/wakapi.db"
-    echo "WAKAPI_USER=Yehor"
+    echo "WAKAPI_USER=${WAKAPI_USER:?set WAKAPI_USER: your login in wakapi}"
     echo "DAWARICH_DB_URL=postgresql://dawarich:$(grep -E '^DAWARICH_DB_PASSWORD=' \
-        /srv/stacks/dawarich/.env | cut -d= -f2-)@dawarich_db:5432/dawarich"
-    echo "DAWARICH_USER_ID=2"
+        ../dawarich/.env | cut -d= -f2-)@dawarich_db:5432/dawarich"
+    echo "DAWARICH_USER_ID=${DAWARICH_USER_ID:?set DAWARICH_USER_ID: users.id in dawarich}"
   } > .env
   chmod 600 .env
 else

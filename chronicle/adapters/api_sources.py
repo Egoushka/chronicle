@@ -168,7 +168,7 @@ class GmailAdapter(ApiAdapter):
     store for very little retrieval gain.
 
     Note this is the source most likely to contain third-party personal data
-    that has nothing to do with Yehor (newsletters, automated mail). Filter
+    that has nothing to do with the owner (newsletters, automated mail). Filter
     hard at the query level in `fetch_page`, not here.
     """
 
@@ -218,9 +218,9 @@ class GithubAdapter(ApiAdapter):
 
 @register
 class JiraAdapter(ApiAdapter):
-    """Jira — ACME work. Ticket transitions are a precise work timeline.
+    """Jira — day-job work. Ticket transitions are a precise work timeline.
 
-    Maps onto the `acme` Hindsight bank, so promoted facts from this source
+    Maps onto the `employer` Hindsight bank, so promoted facts from this source
     should route there rather than to `work`.
     """
 

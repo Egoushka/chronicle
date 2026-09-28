@@ -83,4 +83,5 @@ eval:      ## chronicle vs ripgrep on your own questions
 	python3 -m chronicle.evaluate compare
 
 eval-homelab: ## make eval ON THE BOX — the dump is the whole archive and stays there
-	ssh $${CHRONICLE_DOCTOR_HOST:-homelab} /srv/stacks/chronicle/scripts/eval-homelab.sh
+	ssh "$${CHRONICLE_DOCTOR_HOST:?set CHRONICLE_DOCTOR_HOST}" \
+	  "$${CHRONICLE_STACKS:?set CHRONICLE_STACKS}/chronicle/scripts/eval-homelab.sh"

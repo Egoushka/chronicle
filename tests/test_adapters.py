@@ -203,7 +203,7 @@ def telegram_db(tmp_path) -> str:
             ts = (base + timedelta(minutes=i)).isoformat()
             # synced_at in its live shape: always a fraction (see _bound).
             synced = (base + timedelta(minutes=i)).isoformat(timespec="microseconds")
-            rows.append((i, chat, f"chat{chat}", "user", 1, "Yehor",
+            rows.append((i, chat, f"chat{chat}", "user", 1, "Sam",
                          f"msg {i}", ts, i % 2, None, synced, None))
     conn.executemany("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", rows)
     conn.commit()
@@ -660,7 +660,7 @@ def test_telegram_excludes_bot_chats_by_default(telegram_db):
 
     Without this filter an assistant's own Telegram chat flows telegram-sync ->
     chronicle -> back to the assistant through chronicle's MCP, and it reads
-    its own output as external memory about Yehor. sources.py NOT_SOURCES
+    its own output as external memory about the owner. sources.py NOT_SOURCES
     already blocks tg-assistant, agent-runner and hindsight at the STACK level;
     this is the same rule one level down, at the ROW.
     """
@@ -858,10 +858,10 @@ def test_wakapi_interleaved_projects_do_not_fragment(tmp_path):
 
 
 def test_telegram_outgoing_messages_have_one_author(telegram_db):
-    """telegram-sync names Yehor "me" on one path and by display name on the
+    """telegram-sync names the owner "me" on one path and by display name on the
     other; the adapter must not carry the split into the index."""
     conn = sqlite3.connect(telegram_db)
-    conn.execute("UPDATE messages SET sender_name = 'Yehor Hrushevskyi' WHERE id = 1")
+    conn.execute("UPDATE messages SET sender_name = 'Sam Doe' WHERE id = 1")
     conn.commit()
     conn.close()
     sent = [e for e in TelegramAdapter(telegram_db, exclude_bot_chats=False).fetch()
