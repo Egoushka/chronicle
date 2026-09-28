@@ -52,7 +52,12 @@ class Question:
     question: str
     kind: str                      # lookup | first_mention | aggregate | evolution
     evidence: list[str] = field(default_factory=list)
-    keywords: list[str] = field(default_factory=list)   # for the grep baseline
+    # For the grep baseline: the question's own words only — stems, other
+    # spellings, the RU/UK form of the same word. Never a word from the
+    # answer: chronicle is given only the question, and a keyword lifted from
+    # the gold ("which street?" -> the street's name) grades grep on having
+    # already found it. On 71 questions that alone was worth 14 points.
+    keywords: list[str] = field(default_factory=list)
     note: str | None = None
 
 

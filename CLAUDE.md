@@ -60,15 +60,23 @@ eval-homelab`, 37 questions) — level with grep, not yet clearly ahead.
 | first run | 48.2% | 40.5% |
 | + short segments un-hidden, first_mention fixed (facts 44-45) | 55.0% | 45.8% |
 | + tier 2 data, one enrich batch | 52.3% | 42.3% |
-| + lexical branch revived, question's own date window (facts 46-47) | **63.5%** | **57.1%** |
+| + lexical branch revived, question's own date window (facts 46-47) | 63.5% | 57.1% |
 
-Lookups with the gold outside the top 20: 11 -> 8 of 28. The 8 left are
+**2026-09-29, 71 questions, grep on question words only: chronicle 71.1%
+vs ripgrep 54.2%** (lookup 67.0% vs 41.8%, lookup p@1 36.2% vs 4.3%). Three
+changes, measured one at a time against the same live index: p@1 scored
+per segment (fact 49) and evolution routed to `/evolution` took the old 37
+from +0.7 to +2.0; a second, independent set of 34 questions joined them
+(2 near-duplicates dropped); and grep's keywords lost the answer words the
+first drafts had lifted from the gold. With those words back grep scores
+68.4% on the 71 — its upper bound, and still below chronicle.
+
+Lookups with the gold outside the top 20 on the old 37: 11 -> 8 of 28. The 8 left are
 vocabulary mismatch (the answer never uses the question's words; paraphrase
 or other-script spelling) and one single short message still flagged
 non-substantive. Cross-script spelling variants were tried and reverted: no
 fixed misses, 4x latency. first_mention 100% on par with grep; evolution
-25% both. Caveat: grep's keywords were written by someone who had seen the
-gold; chronicle gets only the question.
+25% both.
 
 **Enrich works and is OFF by default** (`ENRICH_LIMIT=0` in compose.yaml).
 gemini-3.5-flash-lite through LiteLLM on chronicle's own key (fact 42). One
