@@ -1,7 +1,7 @@
 # eval/ is a DIRECTORY, so without .PHONY `make eval` finds it, decides the
 # target is up to date and does nothing — silently, exit 0.
 .PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab purge-excluded \
-        eval eval-init eval-threads eval-homelab resegment
+        eval eval-init eval-threads eval-homelab resegment redact-secrets
 
 VENV  := .venv
 TOOLS := $(VENV)/bin/pytest
@@ -78,6 +78,13 @@ ingest:    ## sources -> event -> episode -> embedding
 #       python -m chronicle.purge          # add --apply to commit
 purge-excluded:  ## count what the adapters now exclude but already ingested (APPLY=1 to delete)
 	python3 -m chronicle.purge $(if $(APPLY),--apply,) $(if $(SOURCE),--source $(SOURCE),)
+
+# Ingest redacts from now on; this rewrites what is already stored, plus every
+# segment citing it (embeddings cleared, so run `embed` after). Counts only —
+# it never prints a match. Runs in chronicle-worker on a deployment:
+#   docker compose --profile batch run --rm chronicle-worker python -m chronicle.redact
+redact-secrets:  ## count stored events holding a secret (APPLY=1 to redact them)
+	python3 -m chronicle.redact $(if $(APPLY),--apply,)
 
 eval-init: ## write the question template you must fill in by hand
 	python3 -m chronicle.evaluate init
