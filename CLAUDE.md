@@ -98,7 +98,7 @@ value whose label sits on another line. `make redact-secrets` does the same
 to what is already stored. Measured 2026-09-29 on the reference archive: 63
 of 689,912 events, and all 5 bare credentials in karakeep's text bookmarks.
 
-**Tested:** 150 unit tests; `make smoke` runs every migration and SQL
+**Tested:** 157 unit tests; `make smoke` runs every migration and SQL
 function plus five integration tests against a real PostgreSQL —
 purge-itest, tally-itest, worker-itest (the pipeline run five times),
 resegment-itest and redact-itest. CI
@@ -147,7 +147,7 @@ paths.
 ## Commands
 
 ```bash
-make test                 # 150 unit tests; bootstraps .venv, no DB or models
+make test                 # 157 unit tests; bootstraps .venv, no DB or models
 make smoke                # migrations + every SQL function, throwaway DB
 make doctor               # validate sources BEFORE ingesting  ← always first
 make ingest               # sources -> event -> segment -> embedding
