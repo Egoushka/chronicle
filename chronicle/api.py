@@ -120,7 +120,8 @@ def health():
         q("SELECT 1")
     except Exception as exc:                                # noqa: BLE001
         raise HTTPException(503, f"db unreachable: {exc}") from exc
-    return {"ok": True}
+    from . import __version__
+    return {"ok": True, "version": __version__}
 
 
 @app.get("/stats")

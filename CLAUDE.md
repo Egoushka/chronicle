@@ -515,6 +515,18 @@ would 40× the bank and make `recall` useless.
   ≥3 segments AND ≥2 threads at confidence ≥0.7. Target hundreds/year. Check
   `get_bank_stats` after each run.
 
+## Versions and releases
+
+One version, in `chronicle/__init__.py` and `pyproject.toml`
+(`tests/test_version.py` keeps them equal and requires a CHANGELOG section
+for it); `/health` reports it. The minor number is roadmap goals done
+(ROADMAP.md), the patch number is fixes between them. Every PR adds a line
+under `## [Unreleased]` in CHANGELOG.md, and one that needs a migration, a
+new setting or a backfill says so under **Upgrade**. To release: move
+Unreleased into a dated `## [X.Y.Z]` section, bump both version strings in
+the same commit, merge, tag `vX.Y.Z` on main, and publish a GitHub release
+from that section. A deployment runs a tag, never a working tree.
+
 ## Working style for this repo
 
 - Investigate before changing; evidence for every claim (file/line/snippet).
