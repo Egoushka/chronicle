@@ -12,6 +12,7 @@ Every stage therefore checkpoints. An OOM kill costs one batch, not the run.
     python -m chronicle.worker ingest      # sources -> event
     python -m chronicle.worker fit-gaps    # measure per-thread session gaps
     python -m chronicle.worker segment     # event -> segment
+    python -m chronicle.worker resegment --thread K   # rebuild threads at a cap
     python -m chronicle.worker embed       # segment.embedding
     python -m chronicle.worker enrich      # summary/topics/facts (slow, optional)
     python -m chronicle.worker all         # the above, in order
@@ -34,6 +35,14 @@ log = logging.getLogger("chronicle.worker")
 
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "500"))
 DB_URL = os.environ.get("CHRONICLE_DB_URL", "")
+
+#: Hard cap on events per narrative segment. A setting, not a constant, so it
+#: can be SWEPT rather than argued about: on the first eval run every lookup
+#: gold in a segment of <=12 events was found (mean rank 1.6, 0 misses), while
+#: segments of >=16 events produced all 3 complete misses. One vector over 30
+#: messages gives the clause that answers the question ~4% of the signal. 30
+#: is not known to be wrong — it is unmeasured. `resegment` makes it runnable.
+MAX_MESSAGES = int(os.environ.get("SEGMENT_MAX_MESSAGES", "30"))
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +303,7 @@ def cmd_segment(args) -> int:
     pre-aggregated from their adapters and map 1:1 to segments — running a
     time-gap segmenter over them produces meaningless thresholds.
     """
+    cap = getattr(args, "max_messages", None) or MAX_MESSAGES
     conn = connect()
     with conn.cursor() as cur:
         # Materialised once per run: ~680k keys, a hash anti-join away from
@@ -330,10 +340,10 @@ def cmd_segment(args) -> int:
                 # did the filtering, so these are substantive by construction.
                 groups, last_id = [[r] for r in new], None
             else:
-                groups, last_id = _segment_narrative(cur, thread_key, new, gap)
+                groups, last_id = _segment_narrative(cur, thread_key, new, gap, cap)
 
             for i, g in enumerate(groups):
-                fields = _segment_fields(g, thread_key, density)
+                fields = _segment_fields(g, thread_key, density, cap)
                 if i == 0 and last_id is not None:
                     _update_segment(cur, last_id, fields)
                     extended += 1
@@ -346,7 +356,129 @@ def cmd_segment(args) -> int:
     return 0
 
 
-def _segment_narrative(cur, thread_key: str, new: list[tuple], gap: int):
+def cmd_resegment(args) -> int:
+    """Throw away named threads' segments and rebuild them from their events.
+
+    `segment` is incremental and never revisits a finished segment, so a
+    changed cap (or segmenter) would otherwise apply only to new events. This
+    is the experiment's other half: rebuild the threads the eval cites at a
+    trial cap, embed, `make eval`, compare. Scoped by design — the whole
+    archive is ~430 threads and ~10 h of re-embedding; the eval's threads are
+    a couple of dozen and minutes.
+
+    Each thread is one transaction: a crash mid-rebuild rolls back to the OLD
+    segmentation rather than leaving the thread with neither. Rebuilt segments
+    have no embedding and no enrichment; `embed` (and `enrich`, if on) redo
+    them. Events are untouched, so nothing keyed on events changes.
+    """
+    threads = getattr(args, "thread", None)
+    if not threads:
+        raise SystemExit("resegment needs --thread (repeatable); "
+                         "`make eval-threads` prints the eval's threads")
+    cap = getattr(args, "max_messages", None) or MAX_MESSAGES
+
+    conn = connect()
+    made = 0
+    for thread_key in threads:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT s.density, coalesce(tc.gap_seconds, 1800)
+                     FROM event e
+                     JOIN source s ON s.source = e.source
+                     LEFT JOIN thread_config tc ON tc.thread_key = e.thread_key
+                    WHERE e.thread_key = %s
+                    LIMIT 1""", (thread_key,))
+            row = cur.fetchone()
+            if row is None:
+                log.warning("no events for thread %s; skipped", thread_key)
+                continue
+            density, gap = row
+            dropped = _clear_thread_segments(cur, thread_key)
+            cur.execute(
+                f"""SELECT {_EVENT_COLS} FROM event e
+                     WHERE e.thread_key = %s
+                     ORDER BY e.ts, e.source_id""", (thread_key,))
+            rows = cur.fetchall()
+            groups = (_cut(rows, gap, cap) if density == "narrative"
+                      else [[r] for r in rows])
+            for g in groups:
+                _insert_segment(cur, thread_key,
+                                _segment_fields(g, thread_key, density, cap))
+        conn.commit()
+        made += len(groups)
+        log.info("%s: %d segments -> %d at cap %d",
+                 thread_key, dropped, len(groups), cap)
+
+    log.info("rebuilt %d thread(s), %d segments; run `embed` next",
+             len(threads), made)
+    return 0
+
+
+def _clear_thread_segments(cur, thread_key: str) -> int:
+    """Drop one thread's segments and everything keyed on them.
+
+    Not `purge`: that deletes the EVENTS too. Here the events survive and only
+    the aggregation layer is rebuilt, so the edges that hang off `event`
+    rather than `segment` — `life_event.source_event_ids`, and
+    `projection_dep` rows of projections that survive — stay strictly alone.
+
+    Three of segment's four inbound edges cascade (`entity_mention`,
+    `fact.source_segment_id`, `commitment.source_segment_id`). The fourth,
+    `commitment.resolution_segment_id`, is NO ACTION (hard-won fact 31).
+    """
+    p = {"tk": thread_key}
+    doomed = "(SELECT segment_id FROM segment WHERE thread_key = %(tk)s)"
+
+    # A commitment RESOLVED BY a doomed segment would abort the DELETE on the
+    # foreign key. Null it and reopen: the commitment's evidence is events
+    # that still exist; only the link to its resolving segment goes, and
+    # enrich re-derives it against the new segmentation.
+    cur.execute(f"""UPDATE commitment SET resolution_segment_id = NULL,
+                           status = 'open'
+                     WHERE resolution_segment_id IN {doomed}""", p)
+
+    # projection_dep has no foreign key, so the cascade into fact/commitment
+    # would leave orphan rows. Keyed by PROJECTION here — purge keys it by
+    # event because purge deletes the events.
+    cur.execute(f"""
+        DELETE FROM projection_dep pd
+         WHERE (pd.projection_kind, pd.projection_id) IN (
+                 SELECT 'fact', fact_id FROM fact
+                  WHERE source_segment_id IN {doomed}
+                 UNION ALL
+                 SELECT 'commitment', commitment_id FROM commitment
+                  WHERE source_segment_id IN {doomed})""", p)
+
+    cur.execute("DELETE FROM segment WHERE thread_key = %(tk)s", p)
+    return cur.rowcount
+
+
+def _cut(rows: list[tuple], gap: int, max_messages: int) -> list[list[tuple]]:
+    """Segment event rows (in `_EVENT_COLS` order) into groups of rows.
+
+    Reply edges are real: `reply_to` is stored as `{chat}:{msg}`, the same
+    shape as `source_id` (the source prefix exists only on
+    segment.source_event_ids, hard-won fact 32), so the two join directly.
+    This used to pass `reply_to_id=None`, which silently disabled
+    segment_chat's reply-edge rule — 7.9% of messages carry one and none ever
+    suppressed a split. A reply to a message outside `rows` has no position
+    and is ignored, which is the rule's own bound anyway.
+    """
+    from .segment import Event, segment_chat
+
+    pos = {r[1]: i for i, r in enumerate(rows)}
+    events = [Event(message_id=i, chat_id=0, sender_id=r[8],
+                    sender_name=r[3] or "?", ts=r[2], text=r[4] or "",
+                    reply_to_id=pos.get(r[7]) if r[7] else None,
+                    transcript=r[5], ocr_text=r[6])
+              for i, r in enumerate(rows)]
+    return [[rows[e.message_id] for e in seg.messages]
+            for seg in segment_chat(events, gap_seconds=gap,
+                                    max_messages=max_messages)]
+
+
+def _segment_narrative(cur, thread_key: str, new: list[tuple], gap: int,
+                       max_messages: int = MAX_MESSAGES):
     """Segment a thread's new events, continuing its last segment if they
     reach back into it.
 
@@ -363,8 +495,6 @@ def _segment_narrative(cur, thread_key: str, new: list[tuple], gap: int):
     it means re-cutting arbitrary interior segments; revisit if backfills of
     old chats become routine.
     """
-    from .segment import Event, segment_chat
-
     cur.execute(
         """SELECT segment_id, started_at, source_event_ids FROM segment
             WHERE thread_key = %s ORDER BY started_at DESC, segment_id DESC
@@ -372,12 +502,7 @@ def _segment_narrative(cur, thread_key: str, new: list[tuple], gap: int):
     last = cur.fetchone()
 
     def cut(rows):
-        events = [Event(message_id=i, chat_id=0, sender_id=r[8],
-                        sender_name=r[3] or "?", ts=r[2],
-                        text=r[4] or "", reply_to_id=None)
-                  for i, r in enumerate(rows)]
-        return [[rows[e.message_id] for e in seg.messages]
-                for seg in segment_chat(events, gap_seconds=gap)]
+        return _cut(rows, gap, max_messages)
 
     if last is None:
         return cut(new), None
@@ -392,7 +517,8 @@ def _segment_narrative(cur, thread_key: str, new: list[tuple], gap: int):
     return cut(_events_by_keys(cur, last_keys) + tail) + groups, last_id
 
 
-def _segment_fields(g: list[tuple], thread_key: str, density: str) -> tuple:
+def _segment_fields(g: list[tuple], thread_key: str, density: str,
+                    max_messages: int = MAX_MESSAGES) -> tuple:
     """Everything a segment row derives from its events, in insert order."""
     from .segment import SEGMENTER_VERSION, build_embed_text
 
@@ -407,7 +533,9 @@ def _segment_fields(g: list[tuple], thread_key: str, density: str) -> tuple:
             # applying the text heuristic marked all of them False and hid
             # them from every query.
             _substantive(g) if density == "narrative" else True,
-            SEGMENTER_VERSION)
+            # The cap is part of what produced this row; a sweep leaves
+            # threads cut at different caps, and this is how to tell them apart.
+            f"{SEGMENTER_VERSION}/m{max_messages}")
 
 
 def _insert_segment(cur, thread_key: str, fields: tuple) -> None:
@@ -708,6 +836,7 @@ COMMANDS = {
     "ingest": cmd_ingest,
     "fit-gaps": cmd_fit_gaps,
     "segment": cmd_segment,
+    "resegment": cmd_resegment,
     "embed": cmd_embed,
     "enrich": cmd_enrich,
 }
@@ -744,6 +873,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="chronicle.worker")
     ap.add_argument("command", choices=[*COMMANDS, "all", "doctor"])
     ap.add_argument("--tier", type=int, default=1, choices=[1, 2, 3, 4])
+    ap.add_argument("--max-messages", type=int, default=MAX_MESSAGES,
+                    help="events per segment cap (default $SEGMENT_MAX_MESSAGES or 30)")
+    ap.add_argument("--thread", action="append", metavar="THREAD_KEY",
+                    help="resegment: a thread to rebuild (repeatable)")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
