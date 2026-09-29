@@ -27,10 +27,11 @@ Legend: ✅ done · ⏳ in progress · ▶ next · · later
    measured honestly.** Scored in each system's own unit; grep gets only the
    question's words, as chronicle does; 70+ labelled questions. 71 questions:
    chronicle 71.1% vs ripgrep 54.2% (lookup 67.0% vs 41.8%). (v0.3.0)
-5. ⏳ **Segment size is measured, not assumed.** The 30-event cap is swept
+5. ✅ **Segment size is measured, not assumed.** The 30-event cap is swept
    (`make resegment`) on the threads the eval cites, and the archive is
-   rebuilt at the winner. Swept 2026-09-29 on 46 eval threads: cap 15
-   71.1% -> 73.2% overall, 20 -> 71.6%; the archive rebuild is next.
+   rebuilt at the winner. Swept on 46 eval threads: 15 -> 73.2%, 20 ->
+   71.6%, 30 -> 71.1%. Archive rebuilt at 15: 75.4% overall, lookup 75.5%
+   (was 67.0%). (v0.4.0)
 6. · **The remaining lookup misses are fixed from the query side.** They are
    vocabulary mismatch: the answer never uses the question's words.
 7. · **Enrichment is on or deleted, decided by an A/B.** The one run so far

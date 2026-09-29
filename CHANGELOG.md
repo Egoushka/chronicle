@@ -8,7 +8,18 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-29
+
+Goal 0.5 of ROADMAP.md: segment size is measured, not assumed. The cap was
+swept on the eval's threads and the reference archive rebuilt at the winner:
+71 questions, chronicle 75.4% (was 71.1%) vs ripgrep 54.2%.
+
 ### Changed
+- Default events per segment is 15, not 30 (`SEGMENT_MAX_MESSAGES`,
+  `segment_chat(max_messages=)`, `make resegment`'s `CAP`). Swept on 46 eval
+  threads: 15 -> 73.2%, 20 -> 71.6%, 30 -> 71.1%. Rebuilt archive at 15:
+  lookup recall 67.0% -> 75.5%, complete misses 10 -> 7, lookup p@1 unchanged
+  (36.2%); the one evolution question that scored went from found to missed.
 - `chronicle-db` runs PostgreSQL 18 (`pgvector/pgvector:0.8.6-pg18`, pinned by
   digest; pgvector stays 0.8.6). From 18 the image keeps its data in
   `/var/lib/postgresql/18/docker`, so the volume is a new one, `chronicle_pg18`,
@@ -18,8 +29,7 @@ says so under **Upgrade**.
   54.2%, 68.4% with answer words), not the 2026-09-26 one (63.5% vs 62.8%, which
   had leaked answer words into grep's keywords), and no longer calls retrieval
   level with grep.
-- CLAUDE.md records the segment cap sweep (roadmap goal 5): cap 15 scores
-  73.2% vs 71.1% at 30 on the eval threads; no code or default changes yet.
+- CLAUDE.md records the segment cap sweep and the rebuild at 15.
 
 ### Upgrade
 - A new major cannot read the old data directory. On an existing install, dump
@@ -29,6 +39,12 @@ says so under **Upgrade**.
   start the rest. The migrations in `./migrations` run on the empty volume
   first; drop the `chronicle` database they built before restoring, or the
   restore collides with it. A fresh install needs nothing.
+- The new cap applies to NEW segments only. To rebuild existing ones, run
+  `python -m chronicle.worker resegment --thread K …` in the worker for each
+  narrative thread with a segment over 15 events, then `embed`. Rebuilding
+  drops those segments' enrichment (facts, commitments, entity mentions,
+  summaries); re-run `enrich` afterwards if you use it. Reference archive: 184
+  threads, 37,540 -> ~49,300 segments, ~5 h of CPU embedding at ~170/min.
 
 ## [0.3.0] - 2026-09-29
 
