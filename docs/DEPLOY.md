@@ -1,6 +1,6 @@
 # Deploying chronicle
 
-Chronicle is one Docker Compose stack: `chronicle-db` (PostgreSQL 16 +
+Chronicle is one Docker Compose stack: `chronicle-db` (PostgreSQL 18 +
 pgvector), `chronicle-api`, `chronicle-mcp`, and a `chronicle-worker` that runs
 on demand under the `batch` profile. It reads its sources and never writes to
 them.
@@ -8,10 +8,10 @@ them.
 ## Before first deploy
 
 1. **Pin the `chronicle-db` digest** in `compose.yaml` if you want a different
-   build of `pgvector/pgvector:pg16` than the one pinned:
+   build of `pgvector/pgvector:0.8.6-pg18` than the one pinned:
    ```bash
-   docker pull pgvector/pgvector:pg16
-   docker inspect --format='{{index .RepoDigests 0}}' pgvector/pgvector:pg16
+   docker pull pgvector/pgvector:0.8.6-pg18
+   docker inspect --format='{{index .RepoDigests 0}}' pgvector/pgvector:0.8.6-pg18
    ```
    pgvector must be **0.7 or newer**: `halfvec` does not exist in 0.6.
 

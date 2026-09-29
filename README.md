@@ -186,8 +186,9 @@ rot.
 
 ## Running it
 
-- **PostgreSQL 16 with pgvector ≥ 0.7** — `halfvec` does not exist in 0.6. The
-  pinned `pgvector/pgvector:pg16` image is fine; a distro package may not be.
+- **PostgreSQL 16 or newer with pgvector ≥ 0.7** — `halfvec` does not exist in
+  0.6. The pinned `pgvector/pgvector:0.8.6-pg18` image is fine; a distro package
+  may not be.
 - **Memory.** api 2.5 GB, db 2 GB, resident. The worker needs 8 GB **while it
   runs** and exits when done, so it is scheduled, not resident.
 - **Throughput.** On the reference host (16 contended CPU cores) the first
