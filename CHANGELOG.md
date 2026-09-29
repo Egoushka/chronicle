@@ -8,6 +8,18 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-29
+
+Goal 0.4 of ROADMAP.md: chronicle beats ripgrep by 10+ points on its
+owner's questions, measured honestly. Goal 0.3 (secret redaction) is still
+open; the minor number counts goals done, not the highest one.
+
+### Changed
+- The grep baseline's keywords are the question's own words only — stems,
+  other spellings, the RU/UK form of the same word, never a word from the
+  answer (`Question.keywords` in `chronicle/evaluate.py`). On 71 questions:
+  chronicle 71.1% vs ripgrep 54.2%; grep with answer words scores 68.4%.
+
 ## [0.2.0] - 2026-09-29
 
 Goal 0.2 of ROADMAP.md: a deployment says which release it runs.

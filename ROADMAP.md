@@ -23,9 +23,10 @@ Legend: ✅ done · ⏳ in progress · ▶ next · · later
 3. ⏳ **No secret reaches the index, the MCP or an LLM.** Redacted at ingest
    for every source; what is already stored is rewritten by a backfill. This
    is what gates the tier-3 sources (documents, bookmarks, photos).
-4. ⏳ **Chronicle beats ripgrep by 10+ points on the owner's questions,
+4. ✅ **Chronicle beats ripgrep by 10+ points on the owner's questions,
    measured honestly.** Scored in each system's own unit; grep gets only the
-   question's words, as chronicle does; 70+ labelled questions.
+   question's words, as chronicle does; 70+ labelled questions. 71 questions:
+   chronicle 71.1% vs ripgrep 54.2% (lookup 67.0% vs 41.8%). (v0.3.0)
 5. ▶ **Segment size is measured, not assumed.** The 30-event cap is swept
    (`make resegment`) on the threads the eval cites, and the archive is
    rebuilt at the winner.

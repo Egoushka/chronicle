@@ -70,6 +70,12 @@ from +0.7 to +2.0; a second, independent set of 34 questions joined them
 (2 near-duplicates dropped); and grep's keywords lost the answer words the
 first drafts had lifted from the gold. With those words back grep scores
 68.4% on the 71 — its upper bound, and still below chronicle.
+The question-words rule is settled (2026-09-29, roadmap goal 4, v0.3.0):
+grep's keywords may hold only the question's own words — stems, other
+spellings, the RU/UK form of the same word — never a word from the answer.
+A lint for it was tried and not kept: prefix, transliteration and skeleton
+matching still flagged 24 of 142 keywords on the cleaned set, all
+legitimate synonyms, and the set is not in the repository for CI to read.
 
 Lookups with the gold outside the top 20 on the old 37: 11 -> 8 of 28. The 8 left are
 vocabulary mismatch (the answer never uses the question's words; paraphrase
