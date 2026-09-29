@@ -65,7 +65,8 @@ def test_segmentation_compresses_and_leaves_no_singletons():
     # A 1-event segment is per-message indexing reintroduced through the back
     # door — the exact mistake this whole design exists to avoid.
     assert min(sizes) > 1, "singleton segments must be merged"
-    assert max(sizes) <= 60, "message cap violated"
+    # Runts merge into a neighbour up to 2x the cap (15), never past it.
+    assert max(sizes) <= 30, "message cap violated"
 
 
 def test_token_cap_is_soft_but_bounded():

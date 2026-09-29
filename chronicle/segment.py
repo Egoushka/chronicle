@@ -13,7 +13,7 @@ Telegram message is ~14 characters, so the gap is larger, not smaller.
 
 Signals used, in order of reliability:
     1. adaptive time gap   deterministic, free, 100% reliable as a boundary
-    2. hard caps           <=30 events, <=250 tokens
+    2. hard caps           <=15 events (swept, see worker.MAX_MESSAGES), <=250 tokens
     3. reply edges         only 7.9% coverage, but a reply crossing a proposed
                            boundary is strong evidence the boundary is wrong
 
@@ -191,7 +191,7 @@ class Segment:
 def segment_chat(
     messages: Iterable[Event],
     gap_seconds: int,
-    max_messages: int = 30,
+    max_messages: int = 15,
     max_tokens: int = 250,
     merge_below: int = 3,
 ) -> list[Segment]:

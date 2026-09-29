@@ -103,13 +103,24 @@ Against a rebuilt 30, cap 15 moves four questions and loses none: one
 missed lookup found (rank 15), one lookup to rank 1 (from 3), one missed
 evolution question half-found. ripgrep is untouched by the cap (54.2%).
 Direction is consistent, size is small: not a result to build on alone.
-The eval threads are left at 15. The cap is a split point, not a ceiling:
+The cap is a split point, not a ceiling:
 `_merge_runts` folds a runt into its neighbour up to `2 x max_messages`,
 hence max 22 at cap 15 and 34-37 at 30. Embedding ran at ~150-165
 segments/min (torch, worker, 8 threads) — 5-6x the 2026-08-11 rate, so a
-full-archive rebuild is hours, not ~10 h. The nightly still continues
-segments at `SEGMENT_MAX_MESSAGES` (default 30), so new events in these
-threads can grow their last segment past 15 until that setting changes.
+full-archive rebuild is hours, not ~10 h.
+
+**The archive was rebuilt at 15 the same day, and 15 is the default since
+v0.4.0.** 184 narrative threads had a segment over 15 events: 37,540
+segments became ~49,300, embedded in batches of ~4k so only one batch was
+ever missing from the dense index (~5 h). The other threads would cut
+identically and were left alone. Result on all 71 questions: **chronicle
+75.4% vs ripgrep 54.2%** — lookup recall 67.0% -> 75.5%, complete misses
+10 -> 7, lookup p@1 unchanged at 36.2%. No lookup lost gold; five gained
+(three misses found). Ranks moved both ways (9 up, 11 down). The one loss:
+the evolution question that scored went from found to missed, so evolution
+is 0% (was 16.7%). Rebuilding cascaded away the one enrich batch's output
+in those threads (590 of 605 facts, 1,742 of 1,798 summaries); enrich is
+off and goal 7 re-runs it as an A/B.
 
 **Enrich works and is OFF by default** (`ENRICH_LIMIT=0` in compose.yaml).
 gemini-3.5-flash-lite through LiteLLM on chronicle's own key (fact 42). One
@@ -166,7 +177,8 @@ vectors; that is the 65%-under-20-chars problem, gone.
 Segmentation was read before embedding, and it holds: every segment sits
 inside one `thread_key`, exchanges read as complete units, and
 `is_substantive` correctly marks filler bursts false. The bump at 30 events
-is the deliberate `max_messages` cap in `segment.py:194`, not a defect.
+was the deliberate `max_messages` cap in `segment.py:194`, not a defect (the
+cap is 15 since v0.4.0).
 
 **Configuration boundary.** Nothing about one deployment lives in code. The
 owner (`CHRONICLE_OWNER`, `CHRONICLE_OWNER_ALIASES`) and every per-user id are
