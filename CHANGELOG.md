@@ -14,6 +14,12 @@ says so under **Upgrade**.
   `/var/lib/postgresql/18/docker`, so the volume is a new one, `chronicle_pg18`,
   mounted at `/var/lib/postgresql`. The old `chronicle_pg` stays declared and
   untouched.
+- README states the 2026-09-29 eval (71 questions: chronicle 71.1% vs ripgrep
+  54.2%, 68.4% with answer words), not the 2026-09-26 one (63.5% vs 62.8%, which
+  had leaked answer words into grep's keywords), and no longer calls retrieval
+  level with grep.
+- CLAUDE.md records the segment cap sweep (roadmap goal 5): cap 15 scores
+  73.2% vs 71.1% at 30 on the eval threads; no code or default changes yet.
 
 ### Upgrade
 - A new major cannot read the old data directory. On an existing install, dump
