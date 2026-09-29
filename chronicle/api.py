@@ -124,6 +124,23 @@ def health():
     return {"ok": True, "version": __version__}
 
 
+@app.get("/freshness")
+def freshness():
+    """`ok` is false when any source is silent, for a gatus body condition."""
+    from .freshness import classify
+    active: dict[str, list] = {}
+    for src, day in q("""SELECT source, ts::date FROM event
+                         WHERE ts > now() - interval '365 days'
+                         GROUP BY 1, 2"""):
+        active.setdefault(src, []).append(day)
+    rows = [classify(src, last, active.get(src, []))
+            for src, last in q("SELECT source, max(ts) FROM event GROUP BY 1")]
+    silent = [r.source for r in rows if r.status == "silent"]
+    return {"ok": not silent, "silent": silent,
+            "sources": [{**r.__dict__, "last_event": r.last_event.isoformat()}
+                        for r in rows]}
+
+
 @app.get("/stats")
 def stats():
     rows = q("""SELECT s.source, s.density, s.enabled, s.last_ingested_at,
