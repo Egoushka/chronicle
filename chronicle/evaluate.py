@@ -15,6 +15,7 @@ cannot tolerate over a personal archive. Evidence recall against known
 source_event_ids is harder to game.
 
     python -m chronicle.evaluate init      # write a question template
+    python -m chronicle.evaluate threads   # thread keys the gold lives in
     python -m chronicle.evaluate grep      # baseline over a text dump
     python -m chronicle.evaluate chronicle # the real pipeline
     python -m chronicle.evaluate compare   # both, side by side
@@ -51,7 +52,12 @@ class Question:
     question: str
     kind: str                      # lookup | first_mention | aggregate | evolution
     evidence: list[str] = field(default_factory=list)
-    keywords: list[str] = field(default_factory=list)   # for the grep baseline
+    # For the grep baseline: the question's own words only — stems, other
+    # spellings, the RU/UK form of the same word. Never a word from the
+    # answer: chronicle is given only the question, and a keyword lifted from
+    # the gold ("which street?" -> the street's name) grades grep on having
+    # already found it. On 71 questions that alone was worth 14 points.
+    keywords: list[str] = field(default_factory=list)
     note: str | None = None
 
 
@@ -89,11 +95,24 @@ def load() -> list[Question]:
     return [Question(**q) for q in json.loads(QUESTIONS_PATH.read_text())]
 
 
-def score(questions: list[Question], answer: Callable[[Question], list[str]]
+Groups = list[list[str]]
+
+
+def score(questions: list[Question], answer: Callable[[Question], Groups]
           ) -> dict[str, Result]:
     """Evidence recall per question kind.
 
-    recall = |retrieved ∩ gold| / |gold|.  p@1 = gold item in first position.
+    `answer` returns RANKED GROUPS, each in the unit its system retrieves:
+    one event per group for ripgrep, one SEGMENT per group for chronicle.
+
+    recall = |retrieved ∩ gold| / |gold| over the flattened ids.
+    p@1 = the top-ranked GROUP contains gold. Flattened, p@1 asked whether
+    the first event of chronicle's top segment was the gold one — false for
+    almost every ~13-event segment even when that segment ranked first and
+    held the answer. Measured on 17 lookups: 11.8% flattened vs 29.4% by
+    segment, with retrieval unchanged. Judge a thing in the unit it is built
+    to serve (hard-won fact 28, one level up).
+
     Questions with no gold evidence are skipped rather than counted as 0 —
     an unlabeled question measures nothing.
     """
@@ -101,13 +120,25 @@ def score(questions: list[Question], answer: Callable[[Question], list[str]]
     for qn in questions:
         if not qn.evidence:
             continue
-        got = answer(qn)
+        groups = answer(qn)
         gold = set(qn.evidence)
         r = out.setdefault(qn.kind, Result(qn.kind))
         r.n += 1
-        r.recall_sum += len(set(got) & gold) / len(gold)
-        if got and got[0] in gold:
+        r.recall_sum += len({e for g in groups for e in g} & gold) / len(gold)
+        if groups and set(groups[0]) & gold:
             r.hit_at_1 += 1
+    return out
+
+
+def _within_budget(groups: Groups, budget: int) -> Groups:
+    """Ranked groups, cut so the flattened ids total at most `budget`."""
+    out: Groups = []
+    left = budget
+    for g in groups:
+        if left <= 0:
+            break
+        out.append(g[:left])
+        left -= len(out[-1])
     return out
 
 
@@ -122,7 +153,7 @@ def score(questions: list[Question], answer: Callable[[Question], list[str]]
 BUDGET = 200
 
 
-def grep_answerer(dump: Path, limit: int = BUDGET) -> Callable[[Question], list[str]]:
+def grep_answerer(dump: Path, limit: int = BUDGET) -> Callable[[Question], Groups]:
     """The bar Chronicle has to clear.
 
     The dump is one line per event: `source:source_id\\tISO_TS\\ttext`.
@@ -130,7 +161,7 @@ def grep_answerer(dump: Path, limit: int = BUDGET) -> Callable[[Question], list[
         psql -c "COPY (SELECT source||':'||source_id, ts, text FROM event
                        ORDER BY ts) TO STDOUT" > eval/dump.tsv
     """
-    def answer(qn: Question) -> list[str]:
+    def answer(qn: Question) -> Groups:
         terms = qn.keywords or [qn.question]
         pattern = "|".join(re.escape(t) for t in terms)
         try:
@@ -140,15 +171,16 @@ def grep_answerer(dump: Path, limit: int = BUDGET) -> Callable[[Question], list[
         except FileNotFoundError:
             raise SystemExit("ripgrep (rg) not installed — that IS the baseline")
         ids = [ln.split("\t", 1)[0] for ln in proc.stdout.splitlines() if "\t" in ln]
-        return ids[:limit]
+        # One event per group: ripgrep's unit is the matching line.
+        return [[i] for i in ids[:limit]]
     return answer
 
 
-def chronicle_answerer(base_url: str) -> Callable[[Question], list[str]]:
+def chronicle_answerer(base_url: str) -> Callable[[Question], Groups]:
     import httpx
     client = httpx.Client(base_url=base_url, timeout=120.0)
 
-    def answer(qn: Question) -> list[str]:
+    def answer(qn: Question) -> Groups:
         # An api error is a miss, not a crash: the question still counts
         # against chronicle, and one bad endpoint cannot hide the rest.
         try:
@@ -157,7 +189,7 @@ def chronicle_answerer(base_url: str) -> Callable[[Question], list[str]]:
             log.warning("chronicle failed %r: %s", qn.question, exc)
             return []
 
-    def _answer(qn: Question) -> list[str]:
+    def _answer(qn: Question) -> Groups:
         if qn.kind == "first_mention":
             # The TERM, as the MCP tool is called — not the question. Sent the
             # whole sentence, the api lemmatised every word into a pattern
@@ -169,13 +201,25 @@ def chronicle_answerer(base_url: str) -> Callable[[Question], list[str]]:
                 r.raise_for_status()
                 cands += r.json()["candidates"]
             cands.sort(key=lambda c: c["date"])
-            return [f"{c['source']}:{c['source_id']}" for c in cands][:BUDGET]
+            # /first-mention answers from `event`, so its unit is the event.
+            return [[f"{c['source']}:{c['source_id']}"] for c in cands][:BUDGET]
+        if qn.kind == "evolution":
+            # The endpoint the MCP tells an agent to use for these. Routed to
+            # /recall, the harness measured top-k similarity DENSITY — the
+            # failure /evolution exists to fix — and stratified_search was
+            # never measured at all. Round-robin by rank within bin, so the
+            # budget cut keeps every period's best hit before any second-best.
+            r = client.post("/evolution", json={"topic": qn.question})
+            r.raise_for_status()
+            bins = list(r.json()["bins"].values())
+            ranked = [b[i]["evidence"] for i in range(max(map(len, bins), default=0))
+                      for b in bins if i < len(b)]
+            return _within_budget(ranked, BUDGET)
         r = client.post("/recall", json={"query": qn.question, "limit": 20})
         r.raise_for_status()
-        out: list[str] = []
-        for hit in r.json()["results"]:
-            out.extend(hit["evidence"])
-        return out[:BUDGET]
+        # One SEGMENT per group, in rank order. See `score`.
+        return _within_budget([hit["evidence"] for hit in r.json()["results"]],
+                              BUDGET)
     return answer
 
 
@@ -191,7 +235,8 @@ def report(title: str, res: dict[str, Result]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="chronicle.evaluate")
-    ap.add_argument("command", choices=["init", "grep", "chronicle", "compare"])
+    ap.add_argument("command",
+                    choices=["init", "threads", "grep", "chronicle", "compare"])
     ap.add_argument("--dump", default="eval/dump.tsv")
     ap.add_argument("--api", default="http://localhost:8030")
     args = ap.parse_args(argv)
@@ -205,6 +250,17 @@ def main(argv: list[str] | None = None) -> int:
         print("Now write 30-50 REAL questions with verified evidence ids.\n"
               "This is a couple of hours and it is the only ground truth you\n"
               "will ever have — there is no multilingual memory benchmark.")
+        return 0
+
+    if args.command == "threads":
+        # The threads the gold lives in — the scope a `worker resegment`
+        # sweep should rebuild, instead of every thread and ~10 h of
+        # re-embedding. An evidence id is `{source}:{source_id}`; telegram's
+        # source_id is `{chat}:{msg}`, so the first two fields are the thread
+        # key (fact 32). A source whose source_id has no colon would need
+        # its adapter's own rule.
+        print(" ".join(sorted({":".join(e.split(":")[:2])
+                               for q in load() for e in q.evidence})))
         return 0
 
     qs = load()

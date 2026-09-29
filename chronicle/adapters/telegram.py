@@ -30,6 +30,20 @@ BATCH = 5_000
 #: backfill chunk commits within seconds.
 SYNC_LAG = timedelta(minutes=10)
 
+# Telegram's own service account. The id is 777000 for every user on the
+# platform — the same kind of invariant as "every bot username ends in bot",
+# not a guess about one archive. It sends login codes, terms-of-service
+# notices and channel-join requests: machine-generated text addressed to an
+# account rather than anything a person said.
+#
+# It hides from BOTH bot signals: its username is `telegram`, which does not
+# end in "bot", and telegram-sync does not tag it `chat:bot`. On the reference
+# archive it held 192 events averaging 299 chars against 27.8 for everything
+# else, so by the unit this index serves it is ~11x heavier than its row count
+# suggests — and it owned the earliest match of an eval first_mention term,
+# which answered the question with a channel-join notice.
+SERVICE_CHAT_ID = 777000
+
 
 def _bound(dt: datetime | None) -> str | None:
     """Render a datetime the way telegram-sync stores it.
@@ -150,7 +164,10 @@ class TelegramAdapter(SqlAdapter):
                     -- rule, and the overlap is partial. Union, not either.
                     AND NOT EXISTS (SELECT 1 FROM chat_tags t
                                     WHERE t.chat_id = v.chat_id
-                                      AND t.tag = %(bottag)s)))
+                                      AND t.tag = %(bottag)s)
+                    -- Same intent as the two above — not a person — and
+                    -- caught by neither of them. See SERVICE_CHAT_ID.
+                    AND v.chat_id <> %(service)s))
             -- Write order, so a batch that commits is a prefix of the stream
             -- and resuming from its max(synced_at) skips nothing. Unindexed:
             -- a full sort of ~700k rows, about a second, once a night.
@@ -160,7 +177,8 @@ class TelegramAdapter(SqlAdapter):
                   "until": _bound(until),
                   "personal": int(self.personal_only),
                   "nobots": int(self.exclude_bot_chats),
-                  "botpat": "%bot", "bottag": "chat:bot"}
+                  "botpat": "%bot", "bottag": "chat:bot",
+                  "service": SERVICE_CHAT_ID}
         if self.exclude_bot_chats or self.exclude_chat_ids:
             log.info("telegram: excluding bot chats=%s, explicit chat_ids=%s",
                      self.exclude_bot_chats,
@@ -230,5 +248,10 @@ class TelegramAdapter(SqlAdapter):
             """
             params = {"botpat": "%bot", "bottag": "chat:bot"}
             keys |= {f"{self.source}:{row[0]}" for row in self._stream(sql, params)}
+            # Not in the SQL above: 777000 need not have a `chats` row to be
+            # excluded by `fetch`, so deriving it from a table would make this
+            # set smaller than fetch's complement and leave its rows indexed
+            # forever — the exact drift this method is asserted against.
+            keys.add(f"{self.source}:{SERVICE_CHAT_ID}")
 
         return keys

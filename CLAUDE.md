@@ -60,15 +60,23 @@ eval-homelab`, 37 questions) — level with grep, not yet clearly ahead.
 | first run | 48.2% | 40.5% |
 | + short segments un-hidden, first_mention fixed (facts 44-45) | 55.0% | 45.8% |
 | + tier 2 data, one enrich batch | 52.3% | 42.3% |
-| + lexical branch revived, question's own date window (facts 46-47) | **63.5%** | **57.1%** |
+| + lexical branch revived, question's own date window (facts 46-47) | 63.5% | 57.1% |
 
-Lookups with the gold outside the top 20: 11 -> 8 of 28. The 8 left are
+**2026-09-29, 71 questions, grep on question words only: chronicle 71.1%
+vs ripgrep 54.2%** (lookup 67.0% vs 41.8%, lookup p@1 36.2% vs 4.3%). Three
+changes, measured one at a time against the same live index: p@1 scored
+per segment (fact 49) and evolution routed to `/evolution` took the old 37
+from +0.7 to +2.0; a second, independent set of 34 questions joined them
+(2 near-duplicates dropped); and grep's keywords lost the answer words the
+first drafts had lifted from the gold. With those words back grep scores
+68.4% on the 71 — its upper bound, and still below chronicle.
+
+Lookups with the gold outside the top 20 on the old 37: 11 -> 8 of 28. The 8 left are
 vocabulary mismatch (the answer never uses the question's words; paraphrase
 or other-script spelling) and one single short message still flagged
 non-substantive. Cross-script spelling variants were tried and reverted: no
 fixed misses, 4x latency. first_mention 100% on par with grep; evolution
-25% both. Caveat: grep's keywords were written by someone who had seen the
-gold; chronicle gets only the question.
+25% both.
 
 **Enrich works and is OFF by default** (`ENRICH_LIMIT=0` in compose.yaml).
 gemini-3.5-flash-lite through LiteLLM on chronicle's own key (fact 42). One
@@ -84,9 +92,10 @@ each adapter's `excluded_thread_keys()` now excludes but a laxer rule already
 indexed. Dry-run by default. Every run writes an
 `erasure_log` row.
 
-**Tested:** 110 unit tests; `make smoke` runs every migration and SQL
-function plus three integration tests against a real PostgreSQL —
-purge-itest, tally-itest, and worker-itest (the pipeline run five times). CI
+**Tested:** 120 unit tests; `make smoke` runs every migration and SQL
+function plus four integration tests against a real PostgreSQL —
+purge-itest, tally-itest, worker-itest (the pipeline run five times), and
+resegment-itest. CI
 runs both, plus `bash -n` on every script, gitleaks, and a check that every
 commit uses a noreply address.
 
@@ -132,12 +141,13 @@ paths.
 ## Commands
 
 ```bash
-make test                 # 110 unit tests; bootstraps .venv, no DB or models
+make test                 # 120 unit tests; bootstraps .venv, no DB or models
 make smoke                # migrations + every SQL function, throwaway DB
 make doctor               # validate sources BEFORE ingesting  ← always first
 make ingest               # sources -> event -> segment -> embedding
 ./scripts/nightly.sh      # ON THE BOX: what cron runs — all stages, tier 2
 make eval-init && make eval   # chronicle vs ripgrep on real questions
+make resegment CAP=15 THREADS="$(make -s eval-threads)"   # a cap sweep's rebuild
 make purge-excluded       # what the filters now exclude but already indexed
 make purge-excluded APPLY=1   # ...and delete it, in one transaction
 ```
@@ -150,6 +160,9 @@ the only test that can catch facts 29-31 and it has caught two of them.
 telegram fixture and a stub LLM: re-runs create nothing, conversations extend
 across runs, transcripts reach segments, enrich replaces rather than
 accumulates, a dead endpoint stops after one batch. Facts 37-38 live there.
+`scripts/resegment-itest.py` rebuilds threads at a new cap under facts,
+commitments and citations (fact 31 again, from the other side), and pins the
+reply-edge rule (fact 48).
 
 Requires PostgreSQL 16 + **pgvector ≥ 0.7** — `halfvec` does not exist in 0.6.
 The distro `postgresql-16-pgvector` package may ship 0.6; the pinned
@@ -451,6 +464,22 @@ named after one starts failing, the fix is being undone.
    applies it unless the caller set dates. It also makes those queries 3-4x
    faster (the dense scan shrinks). Two different years -> no window: a
    window that excludes the answer is worse than none.
+48. **The reply-edge rule never ran.** `segment_chat` suppresses a split when
+   a reply points back into the open segment, and the worker built every
+   Event with `reply_to_id=None`, so none of the 7.9% of messages carrying a
+   reply ever did. `event.reply_to` and `event.source_id` are both
+   `{chat}:{msg}` for telegram and join directly. A rule with no caller looks
+   exactly like a rule that works — `resegment-itest` fails if it goes dark.
+49. **Score p@1 in the unit the system retrieves.** The harness flattened
+   chronicle's ranked segments into one id list and asked whether the FIRST
+   EVENT was gold — false for nearly every ~13-event segment even when it
+   ranked first and held the answer. 11.8% flattened vs 29.4% by segment on
+   17 lookups, retrieval unchanged. Fact 28 one level up.
+50. **Telegram's service account (777000) is not a bot to either signal.**
+   Username `telegram`, never tagged `chat:bot`, so it survived the bot purge:
+   192 events averaging 299 chars, and it owned the earliest match of an eval
+   first_mention term. It has a rule of its own in the adapter and in
+   `excluded_thread_keys`.
 
 ## Design rules that are not negotiable
 

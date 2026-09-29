@@ -196,9 +196,13 @@ def telegram_db(tmp_path) -> str:
         (222, "chat222", "user", "talbot_the_human", 1, ""),
         (333, "chat333", "user", "jarvis_bot", 1, ""),
         (444, "chat444", "user", "BotFather", 1, ""),
+        # Telegram's service account, with its real username. Deliberately NOT
+        # bot-shaped and deliberately untagged: it is invisible to both bot
+        # signals, which is why it needed a rule of its own.
+        (777000, "Telegram", "user", "telegram", 1, ""),
     ])
     conn.execute("INSERT INTO chat_tags (chat_id, tag, source) VALUES (444, 'chat:bot', 'auto')")
-    for chat in (111, 222, 333, 444, 555):
+    for chat in (111, 222, 333, 444, 555, 777000):
         for i in range(10):
             ts = (base + timedelta(minutes=i)).isoformat()
             # synced_at in its live shape: always a fraction (see _bound).
@@ -233,14 +237,14 @@ def test_telegram_since_filter_actually_filters(telegram_db, monkeypatch):
     monkeypatch.setattr("chronicle.adapters.telegram.SYNC_LAG", timedelta(0))
     ad = TelegramAdapter(telegram_db, exclude_bot_chats=False)
     everything = list(ad.fetch())
-    assert len(everything) == 50
+    assert len(everything) == 60
 
     high = max(e.watermark_ts for e in everything)
     assert list(ad.fetch(since=high)) == [], \
         "resume re-read the archive — the TEXT bound is not comparing"
 
     midpoint = sorted(e.watermark_ts for e in everything)[25]
-    assert 0 < len(list(ad.fetch(since=midpoint))) < 50
+    assert 0 < len(list(ad.fetch(since=midpoint))) < 60
 
 
 def test_telegram_resume_overlaps_by_sync_lag(telegram_db):
@@ -298,7 +302,7 @@ def test_telegram_thread_key_partitions_by_chat(telegram_db):
     events = list(TelegramAdapter(telegram_db, exclude_bot_chats=False).fetch())
     assert {e.thread_key for e in events} == {
         "telegram:111", "telegram:222", "telegram:333",
-        "telegram:444", "telegram:555"}
+        "telegram:444", "telegram:555", "telegram:777000"}
 
 
 # --------------------------------------------------------------------------
@@ -681,6 +685,35 @@ def test_telegram_bot_exclusion_needs_both_signals(telegram_db):
     assert 444 not in ids, "chat:bot tag contributes nothing"
 
 
+def test_telegram_excludes_the_service_account(telegram_db):
+    """777000 is Telegram itself — login codes, ToS notices, join requests.
+
+    It defeats both bot signals: its username is `telegram` (not bot-shaped)
+    and telegram-sync never tags it. So it survived the bot purge, and it is
+    not harmless — 192 live events averaging 299 chars against 27.8 for
+    everything else, and it owned the earliest match of an eval
+    first_mention term, answering the question with a channel-join notice.
+    """
+    threads = {e.thread_key for e in TelegramAdapter(telegram_db).fetch()}
+    assert "telegram:777000" not in threads, "service account was not excluded"
+    assert {"telegram:111", "telegram:222"} <= threads, "human chats were dropped"
+
+
+def test_service_account_survives_both_bot_signals(telegram_db):
+    """The regression that matters: someone 'simplifies' the service rule away
+    on the assumption the bot filters already cover it. They do not."""
+    ad = TelegramAdapter(telegram_db)
+    conn = sqlite3.connect(telegram_db)
+    username = conn.execute(
+        "SELECT username FROM chats WHERE chat_id = 777000").fetchone()[0]
+    tagged = conn.execute(
+        "SELECT count(*) FROM chat_tags WHERE chat_id = 777000").fetchone()[0]
+
+    assert not username.endswith("bot"), "username rule would have caught it"
+    assert tagged == 0, "chat:bot tag would have caught it"
+    assert "telegram:777000" in ad.excluded_thread_keys()
+
+
 def test_telegram_keeps_chats_with_no_chats_row(telegram_db):
     """LEFT JOIN, never INNER. 33 chat_ids in the live `messages` table have no
     `chats` row and carry 1,165 messages between them; an inner join deletes
@@ -727,10 +760,11 @@ def test_excluded_thread_keys_is_exactly_the_complement_of_fetch(telegram_db):
     kept = {e.thread_key for e in ad.fetch()}
     excluded = ad.excluded_thread_keys()
 
-    all_chats = {f"telegram:{c}" for c in (111, 222, 333, 444, 555)}
+    all_chats = {f"telegram:{c}" for c in (111, 222, 333, 444, 555, 777000)}
     assert kept | excluded == all_chats, "some chat is in neither half"
     assert kept & excluded == set(), "a chat is both fetched and purged"
-    assert excluded == {"telegram:111", "telegram:333", "telegram:444"}
+    assert excluded == {"telegram:111", "telegram:333", "telegram:444",
+                        "telegram:777000"}
 
 
 def test_excluded_thread_keys_unions_both_bot_signals(telegram_db):
@@ -738,7 +772,7 @@ def test_excluded_thread_keys_unions_both_bot_signals(telegram_db):
     signal alone leaves live rows behind: 92 chats match the username rule and
     29 carry the tag, and the union is 5,806 messages."""
     excluded = TelegramAdapter(telegram_db).excluded_thread_keys()
-    assert excluded == {"telegram:333", "telegram:444"}
+    assert excluded == {"telegram:333", "telegram:444", "telegram:777000"}
 
 
 def test_excluded_thread_keys_is_empty_when_nothing_is_excluded(telegram_db):
