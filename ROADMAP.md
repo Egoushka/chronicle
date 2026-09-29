@@ -40,8 +40,11 @@ Legend: ✅ done · ⏳ in progress · ▶ next · · later
    2026-09-29: enrichment fused as its own lexical list (embedding untouched)
    scored 71.8% against 75.4% without it, on the same index with 36,635
    segments enriched. Nightly enrichment stays off (`ENRICH_LIMIT=0`).
-8. · **A source that goes silent raises an alert.** Today only `doctor`'s
-   "nothing in 90 days" notices, and location and photos died unnoticed.
+8. ✅ **A source that goes silent raises an alert.** `GET /freshness` judges
+   each source against its own longest gap in the past year (silent after
+   twice that, minimum 3 days; dormant after a year) and returns `ok: false`
+   with the silent list. Wiring it to gatus is a change in the host's
+   deployment repo, not here. On 2026-09-29 it flags dawarich (91 days).
 
 ## Stage 1 — Someone else can run it (v1.x)
 
