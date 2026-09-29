@@ -147,11 +147,18 @@ make eval         # scores ripgrep and chronicle on the same questions
 Write the questions from memory, not by browsing the archive: a question
 written after reading the answer is one you already know is findable.
 
-On the reference deployment (37 questions, 2026-09-26), chronicle scores
-**63.5%** against ripgrep's **62.8%** — level with grep, not yet clearly ahead,
-and grep's keywords were written by someone who had seen the answers. The
-remaining misses are vocabulary mismatch: the answer never uses the question's
-words.
+On the reference deployment (71 questions, 2026-09-29), chronicle scores
+**71.1%** against ripgrep's **54.2%**, with grep's keywords limited to the
+question's own words. Give grep the answer's words too and it scores **68.4%**:
+its upper bound, and still below chronicle. The questions are one person's, and
+the margin depends on the grep you compare against, which is why the rule for
+its keywords is written down in `CLAUDE.md`.
+
+The first run (37 questions, 2026-09-26) had chronicle at **63.5%** against
+**62.8%**, level with grep. That grep had been given keywords lifted from the
+answers; the rule for them is now written down. p@1 is also scored on the
+segments chronicle retrieves, not on their first event. The remaining misses are
+vocabulary mismatch: the answer never uses the question's words.
 
 ## Architecture
 
@@ -219,7 +226,8 @@ erasure path. Every database-backed adapter has run against its real
 application's database on the reference deployment.
 
 Not done: the API adapters need a client wired in; enrichment works but stays
-off until an A/B shows it helps; retrieval is level with grep, not ahead of it.
+off until an A/B shows it helps; retrieval beats grep on the owner's 71 questions
+(71.1% against 54.2%, or 68.4% if grep may use the answer's words).
 
 What comes next and in what order: [ROADMAP.md](ROADMAP.md). What changed in
 each release: [CHANGELOG.md](CHANGELOG.md).
