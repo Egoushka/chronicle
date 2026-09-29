@@ -8,6 +8,27 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-29
+
+Goals 6, 7 and 8 of ROADMAP.md: the lookup misses are explained, enrichment is
+decided, a silent source is noticed.
+
+### Added
+- `GET /freshness`: each source's silence against its own longest gap in the
+  past year; `ok` is false when any source is silent (a gatus body condition).
+- `evaluate` logs every question with zero recall.
+- `use_enrich` on `/recall`, `evaluate --enrich`, `ENRICH_THREADS`: the A/B
+  switch for enrichment as a third lexical list.
+
+### Changed
+- Enrichment writes `segment.enrich_text` and no longer rewrites `embed_text`
+  or drops the embedding. Still off by default: the A/B scored 71.8% against
+  75.4% without it (36,635 segments enriched).
+
+### Upgrade
+- Apply `migrations/006_enrich_side_index.sql` (`make migrate`): a column, a
+  partial index, and `hybrid_search` gains `use_enrich`.
+
 ## [0.4.0] - 2026-09-29
 
 Goal 0.5 of ROADMAP.md: segment size is measured, not assumed. The cap was
