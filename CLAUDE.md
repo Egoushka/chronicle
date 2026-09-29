@@ -84,6 +84,33 @@ non-substantive. Cross-script spelling variants were tried and reverted: no
 fixed misses, 4x latency. first_mention 100% on par with grep; evolution
 25% both.
 
+**Segment cap sweep, 2026-09-29 (roadmap goal 5): 15 beats 20 beats 30,
+by two questions of 71.** Scope: the 46 threads the eval's gold lives in,
+minus the 3 largest chats (22,111 of their 34,539 segments — the full
+49 would have been ~25 h of embedding); 34 of 47 lookups have gold only in
+the 46. Each cap rebuilt those threads with `worker resegment`, embedded,
+and ran `eval-homelab`; baseline is the same threads as the nightly left
+them (incremental, cap 30).
+
+| cap | segments | avg / max events | overall | lookup (47) | lookup, rebuilt threads (34) | missed |
+|---|---|---|---|---|---|---|
+| 30, incremental | 12,428 | 12.1 / 37 | 71.1% | 67.0% | 67.6%, p@1 41.2% | 6 |
+| 30, rebuilt | 12,389 | 12.1 / 34 | 71.1% | 67.0% | 67.6%, p@1 38.2% | 6 |
+| 20 | 13,721 | 11.0 / 24 | 71.6% | 67.7% | 68.6%, p@1 38.2% | 6 |
+| **15** | 15,497 | 9.7 / 22 | **73.2%** | **69.1%** | **70.6%, p@1 41.2%** | 5 |
+
+Against a rebuilt 30, cap 15 moves four questions and loses none: one
+missed lookup found (rank 15), one lookup to rank 1 (from 3), one missed
+evolution question half-found. ripgrep is untouched by the cap (54.2%).
+Direction is consistent, size is small: not a result to build on alone.
+The eval threads are left at 15. The cap is a split point, not a ceiling:
+`_merge_runts` folds a runt into its neighbour up to `2 x max_messages`,
+hence max 22 at cap 15 and 34-37 at 30. Embedding ran at ~150-165
+segments/min (torch, worker, 8 threads) — 5-6x the 2026-08-11 rate, so a
+full-archive rebuild is hours, not ~10 h. The nightly still continues
+segments at `SEGMENT_MAX_MESSAGES` (default 30), so new events in these
+threads can grow their last segment past 15 until that setting changes.
+
 **Enrich works and is OFF by default** (`ENRICH_LIMIT=0` in compose.yaml).
 gemini-3.5-flash-lite through LiteLLM on chronicle's own key (fact 42). One
 batch ran 2026-09-26 — 2,446 newest segments, 939 facts, 2 failed calls —
