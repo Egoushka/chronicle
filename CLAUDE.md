@@ -166,7 +166,8 @@ vectors; that is the 65%-under-20-chars problem, gone.
 Segmentation was read before embedding, and it holds: every segment sits
 inside one `thread_key`, exchanges read as complete units, and
 `is_substantive` correctly marks filler bursts false. The bump at 30 events
-is the deliberate `max_messages` cap in `segment.py:194`, not a defect.
+was the deliberate `max_messages` cap in `segment.py:194`, not a defect (the
+cap is 15 since v0.4.0).
 
 **Configuration boundary.** Nothing about one deployment lives in code. The
 owner (`CHRONICLE_OWNER`, `CHRONICLE_OWNER_ALIASES`) and every per-user id are

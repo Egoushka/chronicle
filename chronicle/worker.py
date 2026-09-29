@@ -37,12 +37,13 @@ BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "500"))
 DB_URL = os.environ.get("CHRONICLE_DB_URL", "")
 
 #: Hard cap on events per narrative segment. A setting, not a constant, so it
-#: can be SWEPT rather than argued about: on the first eval run every lookup
-#: gold in a segment of <=12 events was found (mean rank 1.6, 0 misses), while
-#: segments of >=16 events produced all 3 complete misses. One vector over 30
-#: messages gives the clause that answers the question ~4% of the signal. 30
-#: is not known to be wrong — it is unmeasured. `resegment` makes it runnable.
-MAX_MESSAGES = int(os.environ.get("SEGMENT_MAX_MESSAGES", "30"))
+#: can be SWEPT rather than argued about. Swept 2026-09-29 on the 46 threads
+#: the eval's gold lives in, each cap a full rebuild + embed: 15 -> 73.2%
+#: overall, 20 -> 71.6%, 30 -> 71.1%. Against 30, cap 15 moved four questions
+#: and lost none (a missed lookup found, a lookup to rank 1). Small — two
+#: questions of 71 — but one direction. It is a split point, not a ceiling:
+#: `_merge_runts` folds a runt into its neighbour up to 2x the cap.
+MAX_MESSAGES = int(os.environ.get("SEGMENT_MAX_MESSAGES", "15"))
 
 
 # ---------------------------------------------------------------------------
@@ -880,7 +881,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("command", choices=[*COMMANDS, "all", "doctor"])
     ap.add_argument("--tier", type=int, default=1, choices=[1, 2, 3, 4])
     ap.add_argument("--max-messages", type=int, default=MAX_MESSAGES,
-                    help="events per segment cap (default $SEGMENT_MAX_MESSAGES or 30)")
+                    help="events per segment cap (default $SEGMENT_MAX_MESSAGES or 15)")
     ap.add_argument("--thread", action="append", metavar="THREAD_KEY",
                     help="resegment: a thread to rebuild (repeatable)")
     args = ap.parse_args(argv)

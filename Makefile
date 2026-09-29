@@ -102,7 +102,7 @@ eval-threads: ## the thread keys the eval's gold lives in — a resegment sweep'
 #       python -m chronicle.worker resegment --max-messages 15 --thread telegram:123 ...
 resegment: ## rebuild named THREADS at CAP events per segment (see eval-threads)
 	@test -n "$(THREADS)" || { echo "set THREADS (see make eval-threads)"; exit 1; }
-	python3 -m chronicle.worker resegment --max-messages $(or $(CAP),30) \
+	python3 -m chronicle.worker resegment --max-messages $(or $(CAP),15) \
 	  $(foreach t,$(THREADS),--thread $(t))
 
 eval-homelab: ## make eval ON THE BOX — the dump is the whole archive and stays there
