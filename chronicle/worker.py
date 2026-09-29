@@ -642,9 +642,9 @@ def cmd_enrich(args) -> int:
 
     Additive and bounded: at most ENRICH_LIMIT segments per run (default
     2,000), newest first, so the nightly run finishes and the recent past is
-    useful while the backfill grinds. Every enriched segment loses its
-    embedding — embed_text now carries its topics and facts — so `all` runs
-    this BEFORE `embed`, and the re-encode happens in the same run.
+    useful while the backfill grinds. ENRICH_THREADS (comma-separated
+    thread keys) restricts a run to those threads, for the A/B in goal 7.
+    Enrichment lands in `segment.enrich_text`; the embedding is untouched.
 
     A failed call leaves that segment unenriched and it is retried next run.
     ponytail: a segment the model can never answer is retried every night;
@@ -660,6 +660,7 @@ def cmd_enrich(args) -> int:
         return 0
     limit = int(os.environ.get("ENRICH_LIMIT", "2000"))
     workers = int(os.environ.get("ENRICH_CONCURRENCY", "8"))
+    threads = [t for t in os.environ.get("ENRICH_THREADS", "").split(",") if t] or None
 
     conn = connect()
     with conn.cursor() as cur:
@@ -678,9 +679,12 @@ def cmd_enrich(args) -> int:
                          FROM segment s JOIN source src ON src.source = s.sources[1]
                         WHERE s.enriched_at IS NULL AND s.is_substantive
                           AND src.density = 'narrative'
+                          AND (%(threads)s::text[] IS NULL
+                               OR s.thread_key = ANY(%(threads)s))
                         ORDER BY s.started_at DESC
-                        LIMIT %s OFFSET %s""",
-                    (min(workers * 8, limit - done - failed), failed))
+                        LIMIT %(n)s OFFSET %(off)s""",
+                    {"threads": threads, "n": min(workers * 8, limit - done - failed),
+                     "off": failed})
                 rows = cur.fetchall()
                 # (OFFSET skips this run's failures, which stay unenriched.)
                 chats = {r[0]: _chat_and_people(cur, r[5], r[1]) for r in rows}
@@ -734,7 +738,6 @@ def _write_enrichment(conn, seg: tuple, reply: dict, predicates: set[str],
     """
     from .enrich import EXTRACTOR_VERSION, clean, fact_line
     from .resolve import skeleton_key, translit_key
-    from .segment import build_embed_text
 
     segment_id, _thread, started, ended, raw, ids = seg
     out = clean(reply, predicates)
@@ -780,16 +783,18 @@ def _write_enrichment(conn, seg: tuple, reply: dict, predicates: set[str],
                  segment_id, ids, EXTRACTOR_VERSION))
             _cite(cur, "commitment", cur.fetchone()[0], refs)
 
+        # The embedding and embed_text stay as they were: the enrichment is its
+        # own lexical list in hybrid_search (migration 006), so an enriched
+        # segment neither loses its vector nor crowds older gold out of the
+        # dense top 20 (the 2026-09-26 run's likely failure).
         cur.execute(
             """UPDATE segment
                   SET summary = %s, topics = %s, importance = %s, sentiment = %s,
-                      embed_text = %s, extractor_version = %s, enriched_at = now(),
-                      embedding = NULL, lemmatized_text = NULL, embedder_version = NULL
+                      enrich_text = %s, extractor_version = %s, enriched_at = now()
                 WHERE segment_id = %s""",
             (out["summary"], out["topics"], out["importance"], out["sentiment"],
-             build_embed_text(raw, started, chat, people,
-                              facts=[fact_line(f) for f in out["facts"]],
-                              topics=out["topics"]),
+             " ".join([out["summary"] or "", *out["topics"],
+                       *(fact_line(f) for f in out["facts"])]).strip() or None,
              EXTRACTOR_VERSION, segment_id))
 
 

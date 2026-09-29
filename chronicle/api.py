@@ -146,6 +146,7 @@ class RecallReq(BaseModel):
     date_to: datetime | None = None
     source: str | None = None
     limit: int = 20          # Anthropic measured top-20 > top-10 > top-5
+    enrich: bool = False     # fuse the enrichment list (migration 006); A/B switch
 
 
 @app.post("/recall")
@@ -160,11 +161,12 @@ def recall(req: RecallReq):
     vec = _state["embedder"].encode_one(req.query).tolist()
     rows = q("""SELECT h.segment_id, h.rrf_score, e.started_at, e.thread_key,
                        e.raw_text, e.source_event_ids, e.summary
-                FROM hybrid_search(%s::halfvec, %s, %s, %s, NULL, %s, 100, %s) h
+                FROM hybrid_search(%s::halfvec, %s, %s, %s, NULL, %s, 100, %s,
+                                   use_enrich => %s) h
                 JOIN segment e USING (segment_id)
                 ORDER BY h.rrf_score DESC""",
              (vec, req.query, req.date_from, req.date_to,
-              [req.source] if req.source else None, req.limit))
+              [req.source] if req.source else None, req.limit, req.enrich))
     return {
         "intent": intent.kind,
         "routed_because": intent.matched_pattern,
