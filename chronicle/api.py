@@ -124,6 +124,23 @@ def health():
     return {"ok": True, "version": __version__}
 
 
+@app.get("/freshness")
+def freshness():
+    """`ok` is false when any source is silent, for a gatus body condition."""
+    from .freshness import classify
+    active: dict[str, list] = {}
+    for src, day in q("""SELECT source, ts::date FROM event
+                         WHERE ts > now() - interval '365 days'
+                         GROUP BY 1, 2"""):
+        active.setdefault(src, []).append(day)
+    rows = [classify(src, last, active.get(src, []))
+            for src, last in q("SELECT source, max(ts) FROM event GROUP BY 1")]
+    silent = [r.source for r in rows if r.status == "silent"]
+    return {"ok": not silent, "silent": silent,
+            "sources": [{**r.__dict__, "last_event": r.last_event.isoformat()}
+                        for r in rows]}
+
+
 @app.get("/stats")
 def stats():
     rows = q("""SELECT s.source, s.density, s.enabled, s.last_ingested_at,
@@ -146,6 +163,7 @@ class RecallReq(BaseModel):
     date_to: datetime | None = None
     source: str | None = None
     limit: int = 20          # Anthropic measured top-20 > top-10 > top-5
+    enrich: bool = False     # fuse the enrichment list (migration 006); A/B switch
 
 
 @app.post("/recall")
@@ -160,11 +178,12 @@ def recall(req: RecallReq):
     vec = _state["embedder"].encode_one(req.query).tolist()
     rows = q("""SELECT h.segment_id, h.rrf_score, e.started_at, e.thread_key,
                        e.raw_text, e.source_event_ids, e.summary
-                FROM hybrid_search(%s::halfvec, %s, %s, %s, NULL, %s, 100, %s) h
+                FROM hybrid_search(%s::halfvec, %s, %s, %s, NULL, %s, 100, %s,
+                                   use_enrich => %s) h
                 JOIN segment e USING (segment_id)
                 ORDER BY h.rrf_score DESC""",
              (vec, req.query, req.date_from, req.date_to,
-              [req.source] if req.source else None, req.limit))
+              [req.source] if req.source else None, req.limit, req.enrich))
     return {
         "intent": intent.kind,
         "routed_because": intent.matched_pattern,

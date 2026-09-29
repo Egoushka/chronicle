@@ -124,7 +124,10 @@ def score(questions: list[Question], answer: Callable[[Question], Groups]
         gold = set(qn.evidence)
         r = out.setdefault(qn.kind, Result(qn.kind))
         r.n += 1
-        r.recall_sum += len({e for g in groups for e in g} & gold) / len(gold)
+        found = len({e for g in groups for e in g} & gold) / len(gold)
+        r.recall_sum += found
+        if not found:
+            log.info("miss [%s] %s", qn.kind, qn.question)
         if groups and set(groups[0]) & gold:
             r.hit_at_1 += 1
     return out
@@ -176,7 +179,8 @@ def grep_answerer(dump: Path, limit: int = BUDGET) -> Callable[[Question], Group
     return answer
 
 
-def chronicle_answerer(base_url: str) -> Callable[[Question], Groups]:
+def chronicle_answerer(base_url: str, enrich: bool = False
+                       ) -> Callable[[Question], Groups]:
     import httpx
     client = httpx.Client(base_url=base_url, timeout=120.0)
 
@@ -215,7 +219,8 @@ def chronicle_answerer(base_url: str) -> Callable[[Question], Groups]:
             ranked = [b[i]["evidence"] for i in range(max(map(len, bins), default=0))
                       for b in bins if i < len(b)]
             return _within_budget(ranked, BUDGET)
-        r = client.post("/recall", json={"query": qn.question, "limit": 20})
+        r = client.post("/recall", json={"query": qn.question, "limit": 20,
+                                        "enrich": enrich})
         r.raise_for_status()
         # One SEGMENT per group, in rank order. See `score`.
         return _within_budget([hit["evidence"] for hit in r.json()["results"]],
@@ -239,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
                     choices=["init", "threads", "grep", "chronicle", "compare"])
     ap.add_argument("--dump", default="eval/dump.tsv")
     ap.add_argument("--api", default="http://localhost:8030")
+    ap.add_argument("--enrich", action="store_true",
+                    help="fuse the enrichment list into /recall (goal 7 A/B)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
@@ -273,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         res_grep = score(qs, grep_answerer(Path(args.dump)))
         report("ripgrep baseline", res_grep)
     if args.command in ("chronicle", "compare"):
-        res_chr = score(qs, chronicle_answerer(args.api))
+        res_chr = score(qs, chronicle_answerer(args.api, args.enrich))
         report("chronicle", res_chr)
 
     if args.command == "compare":

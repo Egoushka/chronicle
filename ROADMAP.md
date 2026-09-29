@@ -32,13 +32,19 @@ Legend: ✅ done · ⏳ in progress · ▶ next · · later
    rebuilt at the winner. Swept on 46 eval threads: 15 -> 73.2%, 20 ->
    71.6%, 30 -> 71.1%. Archive rebuilt at 15: 75.4% overall, lookup 75.5%
    (was 67.0%). (v0.4.0)
-6. · **The remaining lookup misses are fixed from the query side.** They are
-   vocabulary mismatch: the answer never uses the question's words.
-7. · **Enrichment is on or deleted, decided by an A/B.** The one run so far
-   lowered the score; test facts in the returned hit instead of in the
-   embedded text.
-8. · **A source that goes silent raises an alert.** Today only `doctor`'s
-   "nothing in 90 days" notices, and location and photos died unnoticed.
+6. · **The remaining lookup misses are explained.** Diagnosed 2026-09-29: of
+   7, three rank 33-80 (a reranker could reach them), one sits in a segment
+   filtered as non-substantive, and three are in chats the source never
+   named, so the answer's text holds no word of the question.
+7. ✅ **Enrichment is on or deleted, decided by an A/B.** Decided off,
+   2026-09-29: enrichment fused as its own lexical list (embedding untouched)
+   scored 71.8% against 75.4% without it, on the same index with 36,635
+   segments enriched. Nightly enrichment stays off (`ENRICH_LIMIT=0`).
+8. ✅ **A source that goes silent raises an alert.** `GET /freshness` judges
+   each source against its own longest gap in the past year (silent after
+   twice that, minimum 3 days; dormant after a year) and returns `ok: false`
+   with the silent list. Wiring it to gatus is a change in the host's
+   deployment repo, not here. On 2026-09-29 it flags dawarich (91 days).
 
 ## Stage 1 — Someone else can run it (v1.x)
 

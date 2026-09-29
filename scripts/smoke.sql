@@ -68,6 +68,26 @@ BEGIN
   IF n <> 3 THEN RAISE EXCEPTION 'IDF lexical branch found % of 3 rare segments', n; END IF;
 END $$;
 SELECT 'idf lexical: 3 of 3 rare segments found';
+-- The enrichment list (migration 006): a word only the enrichment holds must
+-- surface its segment when asked, and change nothing when not.
+UPDATE segment SET enrich_text = 'аренда хатыни'
+ WHERE segment_id = (SELECT segment_id FROM segment ORDER BY segment_id LIMIT 1);
+DO $$
+DECLARE on_n int; off_n int;
+BEGIN
+  SELECT count(*) INTO on_n FROM hybrid_search(
+      (SELECT embedding FROM segment LIMIT 1), 'аренда хатыни',
+      NULL, NULL, NULL, NULL, 100, 50, 60, TRUE)
+    WHERE segment_id = (SELECT min(segment_id) FROM segment);
+  SELECT count(*) INTO off_n FROM hybrid_search(
+      (SELECT embedding FROM segment LIMIT 1), 'аренда хатыни',
+      NULL, NULL, NULL, NULL, 100, 50, 60, FALSE)
+    WHERE lex_rank IS NOT NULL AND segment_id = (SELECT min(segment_id) FROM segment);
+  IF on_n <> 1 THEN RAISE EXCEPTION 'enrichment list did not surface its segment'; END IF;
+  IF off_n <> 0 THEN RAISE EXCEPTION 'enrichment leaked into the default search'; END IF;
+END $$;
+SELECT 'enrich list: surfaces on, silent off';
+UPDATE segment SET enrich_text = NULL;
 SELECT 'hybrid_search rows: ' || count(*) FROM hybrid_search(
     (SELECT embedding FROM segment LIMIT 1), 'квартира ипотека',
     NULL, NULL, NULL, NULL, 100, 20);
