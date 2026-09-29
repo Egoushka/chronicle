@@ -8,6 +8,10 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+### Changed
+- CLAUDE.md records the segment cap sweep (roadmap goal 5): cap 15 scores
+  73.2% vs 71.1% at 30 on the eval threads; no code or default changes yet.
+
 ## [0.3.0] - 2026-09-29
 
 Goal 0.4 of ROADMAP.md: chronicle beats ripgrep by 10+ points on its
