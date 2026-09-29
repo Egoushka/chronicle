@@ -8,6 +8,10 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-29
+
+Goal 0.2 of ROADMAP.md: a deployment says which release it runs.
+
 ### Added
 - `chronicle.__version__`, reported by the api's `/health`, so a deployment
   says which release it runs.

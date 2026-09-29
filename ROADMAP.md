@@ -17,9 +17,9 @@ Legend: ✅ done · ⏳ in progress · ▶ next · · later
 
 1. ✅ **It runs on one host, on a schedule, and is public.** Ingest, segment,
    embed and serve nightly; the eval harness and erasure path exist. (v0.1.0)
-2. ⏳ **A deployment says which release it runs.** One version in the
+2. ✅ **A deployment says which release it runs.** One version in the
    package, the changelog and `/health`; releases are tagged; a host runs a
-   tag, not a working tree.
+   tag, not a working tree. (v0.2.0)
 3. ⏳ **No secret reaches the index, the MCP or an LLM.** Redacted at ingest
    for every source; what is already stored is rewritten by a backfill. This
    is what gates the tier-3 sources (documents, bookmarks, photos).
