@@ -200,7 +200,7 @@ services:
   # Stack-private. Never attach it to a shared network: a service there whose
   # name collides with another stack's hijacks DNS for every container on it.
   chronicle-db:
-    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
+    image: pgvector/pgvector:0.8.6-pg18@sha256:2ba9ca5f2e7daa0f0e7723cba1ee9167bab54efd3640516a44ac1a928dd67e7a
     container_name: chronicle-db
     restart: unless-stopped
 
@@ -223,7 +223,9 @@ services:
       - maintenance_work_mem=256MB
 
     volumes:
-      - chronicle_pg:/var/lib/postgresql/data
+      # From PostgreSQL 18 the image keeps its data in /var/lib/postgresql/18/docker,
+      # so the volume goes on /var/lib/postgresql, not .../data.
+      - chronicle_pg18:/var/lib/postgresql
       - ./migrations:/docker-entrypoint-initdb.d:ro
 
     mem_limit: 2g
@@ -248,5 +250,8 @@ networks:
         - subnet: 10.211.71.0/24
 
 volumes:
+  # PostgreSQL 16's data from before the move to 18. Nothing mounts it; it is kept
+  # so going back is reverting that change. Delete it once 18 has run clean.
   chronicle_pg:
+  chronicle_pg18:
   chronicle_models:

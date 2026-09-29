@@ -8,6 +8,22 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+### Changed
+- `chronicle-db` runs PostgreSQL 18 (`pgvector/pgvector:0.8.6-pg18`, pinned by
+  digest; pgvector stays 0.8.6). From 18 the image keeps its data in
+  `/var/lib/postgresql/18/docker`, so the volume is a new one, `chronicle_pg18`,
+  mounted at `/var/lib/postgresql`. The old `chronicle_pg` stays declared and
+  untouched.
+
+### Upgrade
+- A new major cannot read the old data directory. On an existing install, dump
+  before switching and restore into the new, empty volume: stop the api,
+  `pg_dumpall` from the 16 container, stop it, deploy this compose file, start
+  `chronicle-db` alone, restore the dump through the `postgres` database, then
+  start the rest. The migrations in `./migrations` run on the empty volume
+  first; drop the `chronicle` database they built before restoring, or the
+  restore collides with it. A fresh install needs nothing.
+
 ## [0.3.0] - 2026-09-29
 
 Goal 0.4 of ROADMAP.md: chronicle beats ripgrep by 10+ points on its
