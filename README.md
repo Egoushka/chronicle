@@ -221,6 +221,9 @@ application's database on the reference deployment.
 Not done: the API adapters need a client wired in; enrichment works but stays
 off until an A/B shows it helps; retrieval is level with grep, not ahead of it.
 
+What comes next and in what order: [ROADMAP.md](ROADMAP.md). What changed in
+each release: [CHANGELOG.md](CHANGELOG.md).
+
 ## Security and privacy
 
 A chat archive holds other people's words as well as yours, and chronicle's
