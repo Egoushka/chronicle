@@ -131,6 +131,17 @@ segments were enriched, so the likely mechanism is enriched segments
 crowding older gold out of the top 20. One question of 28: not conclusive,
 not positive. Turn it on only for a measured A/B.
 
+**Enrichment A/B, 2026-09-29 (roadmap goal 7): off.** Enrichment moved out of
+`embed_text` into `segment.enrich_text`, fused by RRF as a third lexical list
+only when asked (`use_enrich`, migration 006; `evaluate --enrich`), so the
+embedding and the raw-text lists are identical in both arms. 36,635 segments
+in the 49 eval threads were enriched (78 failed, ~40 min at 16 workers).
+Result on the 71 questions: **75.4% without, 71.8% with** — lookup 75.5% ->
+70.2%, p@1 36.2% -> 29.8%, two more complete misses. The 2026-09-26 loss was
+therefore not crowding by embedded text alone: the enrichment's own words pull
+wrong segments up. Not worth a second design; the code stays as the switch
+that reproduced this, the default is off.
+
 **Erasure runs.** `chronicle/purge.py` + `make purge-excluded` delete whatever
 each adapter's `excluded_thread_keys()` now excludes but a laxer rule already
 indexed. Dry-run by default. Every run writes an

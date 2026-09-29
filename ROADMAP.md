@@ -36,9 +36,10 @@ Legend: ✅ done · ⏳ in progress · ▶ next · · later
    7, three rank 33-80 (a reranker could reach them), one sits in a segment
    filtered as non-substantive, and three are in chats the source never
    named, so the answer's text holds no word of the question.
-7. · **Enrichment is on or deleted, decided by an A/B.** The one run so far
-   lowered the score; test facts in the returned hit instead of in the
-   embedded text.
+7. ✅ **Enrichment is on or deleted, decided by an A/B.** Decided off,
+   2026-09-29: enrichment fused as its own lexical list (embedding untouched)
+   scored 71.8% against 75.4% without it, on the same index with 36,635
+   segments enriched. Nightly enrichment stays off (`ENRICH_LIMIT=0`).
 8. · **A source that goes silent raises an alert.** Today only `doctor`'s
    "nothing in 90 days" notices, and location and photos died unnoticed.
 
