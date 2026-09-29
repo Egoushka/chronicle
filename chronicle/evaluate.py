@@ -124,7 +124,10 @@ def score(questions: list[Question], answer: Callable[[Question], Groups]
         gold = set(qn.evidence)
         r = out.setdefault(qn.kind, Result(qn.kind))
         r.n += 1
-        r.recall_sum += len({e for g in groups for e in g} & gold) / len(gold)
+        found = len({e for g in groups for e in g} & gold) / len(gold)
+        r.recall_sum += found
+        if not found:
+            log.info("miss [%s] %s", qn.kind, qn.question)
         if groups and set(groups[0]) & gold:
             r.hit_at_1 += 1
     return out
