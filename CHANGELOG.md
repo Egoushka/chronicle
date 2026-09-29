@@ -14,12 +14,19 @@ says so under **Upgrade**.
 - This changelog and [ROADMAP.md](ROADMAP.md).
 - `worker resegment --thread K --max-messages N` and `SEGMENT_MAX_MESSAGES`,
   to measure the segment cap; `make eval-threads` for its scope.
+- Secret redaction at ingest for every source (`chronicle/redact.py`), and
+  `make redact-secrets` to rewrite what is already stored.
 
 ### Fixed
 - Reply edges now suppress segment splits; the worker had disabled the rule.
 - Telegram's service account (777000) is excluded; run `make purge-excluded`.
 - Eval scores p@1 per segment, routes evolution questions to `/evolution`,
   and `make eval` runs at all (it was a silent no-op).
+
+### Upgrade
+- Run `python -m chronicle.redact` in the worker to count stored secrets,
+  then `--apply` and `embed`. Rotate anything it finds: redaction removes the
+  value from chronicle, not from wherever else it was pasted.
 
 ## [0.1.0] - 2026-09-29
 

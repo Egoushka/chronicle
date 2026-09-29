@@ -153,11 +153,17 @@ def _write_events(conn, batch) -> list[str]:
 
     Inserted vs updated is told apart by `ingested_at`: the column defaults to
     now(), which is fixed for the transaction, and an UPDATE leaves it alone.
+
+    Secrets are redacted HERE, before the row exists — see `chronicle.redact`.
+    A stored row that still holds one differs from its redacted re-read, so
+    the overlap window rewrites it and its segment like any other edit.
     """
     import json
 
-    rows = [(e.source, e.source_id, e.ts, e.kind, e.actor, e.text,
-             json.dumps(e.payload, default=str),
+    from .redact import redact, redact_obj
+
+    rows = [(e.source, e.source_id, e.ts, e.kind, e.actor, redact(e.text)[0],
+             json.dumps(redact_obj(e.payload)[0], default=str),
              e.reply_to, e.thread_key) for e in batch]
     changed: list[str] = []
     with conn.cursor() as cur:

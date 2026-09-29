@@ -92,10 +92,16 @@ each adapter's `excluded_thread_keys()` now excludes but a laxer rule already
 indexed. Dry-run by default. Every run writes an
 `erasure_log` row.
 
-**Tested:** 120 unit tests; `make smoke` runs every migration and SQL
-function plus four integration tests against a real PostgreSQL —
-purge-itest, tally-itest, worker-itest (the pipeline run five times), and
-resegment-itest. CI
+**Secrets are redacted at ingest** (`chronicle/redact.py`), for every source
+and tier, before the row exists — token formats, labelled values, and a bare
+value whose label sits on another line. `make redact-secrets` does the same
+to what is already stored. Measured 2026-09-29 on the reference archive: 63
+of 689,912 events, and all 5 bare credentials in karakeep's text bookmarks.
+
+**Tested:** 157 unit tests; `make smoke` runs every migration and SQL
+function plus five integration tests against a real PostgreSQL —
+purge-itest, tally-itest, worker-itest (the pipeline run five times),
+resegment-itest and redact-itest. CI
 runs both, plus `bash -n` on every script, gitleaks, and a check that every
 commit uses a noreply address.
 
@@ -141,7 +147,7 @@ paths.
 ## Commands
 
 ```bash
-make test                 # 120 unit tests; bootstraps .venv, no DB or models
+make test                 # 157 unit tests; bootstraps .venv, no DB or models
 make smoke                # migrations + every SQL function, throwaway DB
 make doctor               # validate sources BEFORE ingesting  ← always first
 make ingest               # sources -> event -> segment -> embedding
@@ -150,6 +156,7 @@ make eval-init && make eval   # chronicle vs ripgrep on real questions
 make resegment CAP=15 THREADS="$(make -s eval-threads)"   # a cap sweep's rebuild
 make purge-excluded       # what the filters now exclude but already indexed
 make purge-excluded APPLY=1   # ...and delete it, in one transaction
+make redact-secrets       # count stored events holding a secret (APPLY=1 rewrites)
 ```
 
 `make smoke` also runs `scripts/purge-itest.py`, which exercises the erasure
@@ -480,6 +487,17 @@ named after one starts failing, the fix is being undone.
    192 events averaging 299 chars, and it owned the earliest match of an eval
    first_mention term. It has a rule of its own in the adapter and in
    `excluded_thread_keys`.
+51. **A secret's label is not always next to it.** karakeep held five
+   credentials, each alone on one line with its label on another after it
+   ("…\n\n<service> api key"); every token-format and `label: value` pattern
+   found none of them. The bare-value rule needs all of: a label somewhere in
+   the text, the value alone on its line, 20+ chars mixing letters and
+   digits, not a URL, not code shape. Each guard came from a measured miss or
+   false hit on the live archive — lastfm's one-line JSON, XAML `xmlns` lines,
+   `Claude35Sonnet` beside "api key" — and a character blocklist tried on the
+   way lost two of the five real values. Redaction must also be idempotent:
+   `[REDACTED:url_password]` matched `user:pass@` again, which would have
+   rewritten the event and re-embedded its segment on every run.
 
 ## Design rules that are not negotiable
 
