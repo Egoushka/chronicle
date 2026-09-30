@@ -176,6 +176,19 @@ services:
       # 28, not conclusive, and not positive. Set ENRICH_LIMIT in .env to turn
       # it back on for an A/B run against `make eval-homelab`.
       ENRICH_LIMIT: ${ENRICH_LIMIT:-0}
+      # Calls a minute to LiteLLM. Unbounded, the 2026-09-29 run made ~895 a
+      # minute, took its $10 key to $17.54 and the box's $50 budget to 96%.
+      ENRICH_RPM: ${ENRICH_RPM:-120}
+      # Pre-extraction gate (chronicle/gate.py): none | jev | chat. Off by
+      # default. GATE_KEY, a dedicated LiteLLM virtual key, goes in .env.
+      # GATE_SKIP=0 scores and still extracts (shadow); 1 skips low scores.
+      GATE_BACKEND: ${GATE_BACKEND:-none}
+      GATE_URL: ${GATE_URL:-}
+      GATE_MODEL: ${GATE_MODEL:-}
+      GATE_THRESHOLD: ${GATE_THRESHOLD:-0.42}
+      GATE_SKIP: ${GATE_SKIP:-0}
+      GATE_RPM: ${GATE_RPM:-300}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000/v1}
       # Same reasoning as chronicle-api above. The worker encodes in batches
       # rather than one query at a time, so it is less sensitive than the API,
       # but it runs on the same contended 16 cores.

@@ -117,6 +117,32 @@ Every stage is incremental and safe to re-run, so the same command is the
 nightly job; `scripts/nightly.sh` wraps it for cron. The full sequence,
 including what to check between stages, is [docs/DEPLOY.md](docs/DEPLOY.md).
 
+### Gating enrichment
+
+Enrichment is one chat-model call per segment, and most calls find nothing (76%
+of 36,635 on 2026-09-29). `GATE_BACKEND=jev|chat` scores each segment first
+with a cheaper model (`chronicle/gate.py`); `none` (default) extracts everything.
+`jev` needs LiteLLM's `/typesafe` pass-through (`TYPESAFE_API_KEY` on the proxy)
+and a dedicated virtual key in `GATE_KEY`; Jev is optional, `chat` needs only a
+LiteLLM chat model in `GATE_MODEL`.
+
+Roll out in two steps. **Shadow** (`GATE_SKIP=0`): every segment is scored,
+stored in `segment.gate_p`, and still extracted. Then compare the score with
+what extraction found:
+
+```sql
+SELECT round(gate_p::numeric, 1) AS p, count(*) AS segments,
+       count(*) FILTER (WHERE EXISTS (SELECT 1 FROM fact f WHERE f.source_segment_id = s.segment_id)
+                           OR EXISTS (SELECT 1 FROM commitment c WHERE c.source_segment_id = s.segment_id)) AS yielded
+  FROM segment s WHERE gate_p IS NOT NULL AND enriched_at IS NOT NULL GROUP BY 1 ORDER BY 1;
+```
+
+Pick the threshold whose lower buckets hold few `yielded` segments (0.42 kept
+97% of facts and commitments in the first replay), then set `GATE_SKIP=1`.
+Skipped segments stay unenriched and leave the queue; lowering
+`GATE_THRESHOLD` or changing the model brings them back. `ENRICH_RPM` and
+`GATE_RPM` cap calls a minute.
+
 ## Connect an assistant
 
 The MCP server listens on `http://127.0.0.1:8031/sse` (SSE transport).
