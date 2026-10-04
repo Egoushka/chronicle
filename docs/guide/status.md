@@ -18,6 +18,7 @@ Each row names the evidence for its status. `works` means a test in this reposit
 | First-mention and per-period search | works | [smoke.sql](../../scripts/smoke.sql) |
 | `/tally` with your SQL, as a SELECT-only role | works | [tally-itest.py](../../scripts/tally-itest.py) |
 | Secret redaction at ingest, and the backfill | works | [test_redact.py](../../tests/test_redact.py), [redact-itest.py](../../scripts/redact-itest.py) |
+| Nytka: mute windows, deleted and merged conversations, nothing promoted or enriched | works | [nytka-itest.py](../../scripts/nytka-itest.py), [test_nytka.py](../../tests/test_nytka.py) |
 | Erasure of what a filter now excludes | works | [purge-itest.py](../../scripts/purge-itest.py), [test_adapters.py](../../tests/test_adapters.py) |
 | `doctor` preflight checks | works | [test_adapters.py](../../tests/test_adapters.py) |
 | telegram, wakapi, karakeep, owntracks, lastfm | works | [test_adapters.py](../../tests/test_adapters.py) |

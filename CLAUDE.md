@@ -48,7 +48,7 @@ Full reasoning and citations: `docs/RESEARCH.md` (16k words).
 ## Status
 
 **Runs:** schema, segmentation, gap fitting, cross-script entity resolution,
-intent routing, RRF fusion, bi-temporal facts, source policy, 18 adapters,
+intent routing, RRF fusion, bi-temporal facts, source policy, 19 adapters,
 doctor, worker (ingest/fit-gaps/segment/enrich/embed), api, evaluate, MCP
 surface (mcp 2.x since 2026-09-26).
 
@@ -122,6 +122,37 @@ is 0% (was 16.7%). Rebuilding cascaded away the one enrich batch's output
 in those threads (590 of 605 facts, 1,742 of 1,798 summaries); enrich is
 off and goal 7 re-runs it as an A/B.
 
+**Nytka source, measured 2026-10-04 before enabling (tier 4, off until `TIER=4`).**
+Nytka is ambient speech from a wearable, read in place from its server's
+PostgreSQL: 129 conversations and 4,798 utterances in five days (298k chars;
+37% under 20 chars, 67% under 60, 6% over 200 — Telegram is 65 / 94 / 1.5). The
+default segmenter turns them into 456 segments of 9.8 events and 622 chars
+(91% substantive) in 105 threads; 350 utterances (7%) sit inside a mute window
+the server only applies to audio captured after it was saved, and are skipped.
+Redaction changed 0 of 4,448 utterances.
+Does it crowd the Telegram archive out? The 71 questions on a throwaway clone
+of the live index (68,931 segments), same questions and api each time:
+
+| Nytka in the index | segments | overall | lookup p@1 | Nytka share of top-20 |
+|---|---|---|---|---|
+| none | 0 | 75.4% | 36.2% | 0% |
+| as measured | 456 (5 days) | 75.4% | 36.2% | 0.4% |
+| x8, copied forward in time | 3,648 (~40 days) | 75.4% | 31.9% | 2.2% |
+| x40, copied forward in time | 18,240 (~200 days) | 76.1% | 34.0% | 1.0% |
+
+No drop beyond the one-question noise of 71 (1.4 points), so no stricter
+`is_substantive` rule and no gate: `chronicle/gate.py` gates ENRICHMENT calls,
+not indexing, so it could not have been one. The x8 and x40 rows are copies of
+the real vectors, so ranks clump; they test volume, not variety. Median
+`/recall` on that box: 0.78 s with none, 0.76 s with 456, 0.99 s with 18,240.
+Re-run `make eval-homelab` (`EVAL_DB`, `EVAL_API`) when Nytka passes ~20k
+segments or the live eval loses two questions. The eval has no Nytka gold
+question, so it shows harm to old questions, not whether Nytka answers its own.
+Cost: 456 segments embedded in 298 s (8 threads, model load included, ~4.1 GiB
+sampled peak, load average 2.0 -> 7.4). At the observed ~91 segments a day a
+night adds about a minute to the worker that already embeds Telegram, and the
+index grows by ~33k segments a year on top of 68.9k. No new service.
+
 **Enrich works and is OFF by default** (`ENRICH_LIMIT=0` in compose.yaml).
 gemini-3.5-flash-lite through LiteLLM on chronicle's own key (fact 42). One
 batch ran 2026-09-26 — 2,446 newest segments, 939 facts, 2 failed calls —
@@ -153,10 +184,10 @@ value whose label sits on another line. `make redact-secrets` does the same
 to what is already stored. Measured 2026-09-29 on the reference archive: 63
 of 689,912 events, and all 5 bare credentials in karakeep's text bookmarks.
 
-**Tested:** 157 unit tests; `make smoke` runs every migration and SQL
-function plus five integration tests against a real PostgreSQL —
+**Tested:** 195 unit tests; `make smoke` runs every migration and SQL
+function plus six integration tests against a real PostgreSQL —
 purge-itest, tally-itest, worker-itest (the pipeline run five times),
-resegment-itest and redact-itest. CI
+resegment-itest, redact-itest and nytka-itest. CI
 runs both, plus `bash -n` on every script, gitleaks, and a check that every
 commit uses a noreply address.
 
@@ -203,7 +234,7 @@ paths.
 ## Commands
 
 ```bash
-make test                 # 157 unit tests; bootstraps .venv, no DB or models
+make test                 # 195 unit tests; bootstraps .venv, no DB or models
 make smoke                # migrations + every SQL function, throwaway DB
 make doctor               # validate sources BEFORE ingesting  ← always first
 make ingest               # sources -> event -> segment -> embedding
@@ -554,6 +585,20 @@ named after one starts failing, the fix is being undone.
    way lost two of the five real values. Redaction must also be idempotent:
    `[REDACTED:url_password]` matched `user:pass@` again, which would have
    rewritten the event and re-embedded its segment on every run.
+
+52. **Nytka's conversations are hard-deleted and merged, and its mute windows
+   are not retroactive.** `DELETE /conversations/{id}` cascades with no
+   tombstone, and late audio that bridges two conversations MERGES them: the
+   survivor takes the other's segments and the other row is deleted. So a
+   conversation id missing upstream does not mean its speech is gone, and
+   purging it would erase utterances that still exist (chronicle keeps them
+   under the old thread key, and no later ingest re-reads them). The adapter
+   excludes a thread only when its conversation AND every one of its segments
+   are gone. `conversations.updated_at` moves on new speech and on close, not
+   on an AI title, so it is a complete cursor over closed conversations. A
+   mute window drops audio before transcription only from the moment it is
+   saved: 350 of 4,798 utterances were inside the configured one, all captured
+   earlier. The adapter applies the window itself.
 
 ## Design rules that are not negotiable
 

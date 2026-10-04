@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -183,6 +184,10 @@ def chronicle_answerer(base_url: str, enrich: bool = False
                        ) -> Callable[[Question], Groups]:
     import httpx
     client = httpx.Client(base_url=base_url, timeout=120.0)
+    #: Which source holds each /recall result, over every lookup question. A
+    #: new source that outnumbers the gold's can lower recall without ever
+    #: being wrong, by taking slots; this is the number that shows it.
+    slots: Counter = Counter()
 
     def answer(qn: Question) -> Groups:
         # An api error is a miss, not a crash: the question still counts
@@ -222,9 +227,11 @@ def chronicle_answerer(base_url: str, enrich: bool = False
         r = client.post("/recall", json={"query": qn.question, "limit": 20,
                                         "enrich": enrich})
         r.raise_for_status()
+        hits = [hit["evidence"] for hit in r.json()["results"]]
+        slots.update(g[0].split(":")[0] for g in hits if g)
         # One SEGMENT per group, in rank order. See `score`.
-        return _within_budget([hit["evidence"] for hit in r.json()["results"]],
-                              BUDGET)
+        return _within_budget(hits, BUDGET)
+    answer.slots = slots
     return answer
 
 
@@ -280,8 +287,13 @@ def main(argv: list[str] | None = None) -> int:
         res_grep = score(qs, grep_answerer(Path(args.dump)))
         report("ripgrep baseline", res_grep)
     if args.command in ("chronicle", "compare"):
-        res_chr = score(qs, chronicle_answerer(args.api, args.enrich))
+        answerer = chronicle_answerer(args.api, args.enrich)
+        res_chr = score(qs, answerer)
         report("chronicle", res_chr)
+        total = sum(answerer.slots.values())
+        if total:
+            print("  /recall results by source: " + ", ".join(
+                f"{s} {n} ({n / total:.1%})" for s, n in answerer.slots.most_common()))
 
     if args.command == "compare":
         tot = lambda r: (sum(x.recall_sum for x in r.values())      # noqa: E731

@@ -149,6 +149,14 @@ POLICIES: list[SourcePolicy] = [
         "that would drown the archive.",
     ),
     SourcePolicy(
+        "nytka", Density.NARRATIVE, Tier.AMBIENT, None,
+        "Speech around the owner, from a wearable: what was said in rooms the "
+        "owner was in, with no chat to have written it down.",
+        "Other people's words, several times Telegram's volume a day, and a transcriber's "
+        "errors. No Hindsight bank: nothing from it is ever promoted. Last tier "
+        "because it is the likeliest to crowd out the archive; see CLAUDE.md.",
+    ),
+    SourcePolicy(
         "owntracks", Density.TELEMETRY, Tier.AMBIENT, None,
         "Raw location, if you prefer it to dawarich.",
         "Mutually exclusive with dawarich — same underlying GPS.",

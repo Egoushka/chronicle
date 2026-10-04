@@ -1,11 +1,11 @@
 ---
 title: "Connect a source"
-description: "What each of the 18 adapters reads and emits, the variables it needs, how doctor checks it, and when to open the next tier."
+description: "What each of the 19 adapters reads and emits, the variables it needs, how doctor checks it, and when to open the next tier."
 order: 2
 section: "Guides"
 ---
 
-Chronicle has 18 adapters, one per source, each registered with a policy in [sources.py](../../chronicle/sources.py). Eleven of them can be switched on from `.env`. The other seven need code you write first ([Sources you cannot connect yet](#sources-you-cannot-connect-yet)).
+Chronicle has 19 adapters, one per source, each registered with a policy in [sources.py](../../chronicle/sources.py). Twelve of them can be switched on from `.env`. The other seven need code you write first ([Sources you cannot connect yet](#sources-you-cannot-connect-yet)).
 
 ## How a source is wired
 
@@ -21,7 +21,7 @@ A source takes three things, and then a check:
 | 1, core | `telegram`, `wakapi`, `dawarich` | `calendar` |
 | 2, behaviour | `firefly`, `lastfm`, `forgejo` | `jira` |
 | 3, artifact | `immich`, `paperless`, `karakeep` | `gmail`, `notion`, `github`, `linkedin`, `slack` |
-| 4, ambient | `miniflux`, `owntracks` | none |
+| 4, ambient | `miniflux`, `owntracks`, `nytka` | none |
 
 Each source also has a density, which decides how its events are aggregated and whether they are segmented ([Source policy](how-it-works.md#source-policy)). The notes under each table name it.
 
@@ -89,10 +89,21 @@ Each source also has a density, which decides how its events are aggregated and 
 |---|---|---|---|
 | `miniflux` | PostgreSQL: `entries`, `feeds` | article read or starred | `MINIFLUX_DB_URL` |
 | `owntracks` | recorder files, `rec/**/*.rec` | stay of 20 minutes or more | `OWNTRACKS_STORE` |
+| `nytka` | PostgreSQL: `conversations`, `segments`, `people`, `person_voices`, `settings` | utterance | `NYTKA_DB_URL`, `NYTKA_EXCLUDE_CONVERSATIONS` |
 
 **miniflux** (ambient) reads only entries you read or starred: the unread firehose carries no evidence you saw it ([miniflux.py](../../chronicle/adapters/miniflux.py)). The event time is the article's publication time.
 
 **owntracks** (telemetry) reads the recorder's flat JSONL files under `OWNTRACKS_STORE` and emits stays where consecutive points stay within about 150 m for 20 minutes or more ([owntracks.py](../../chronicle/adapters/owntracks.py)). It reads the same GPS signal as dawarich, so every trip would count twice; `doctor` reports a conflict and exits 1 when both are configured.
+
+**nytka** (narrative) reads the PostgreSQL of a [Nytka](https://github.com/nytka-app/server) server, the self-hosted back end of a wearable that records speech ([nytka.py](../../chronicle/adapters/nytka.py)). Most of what it holds is other people's: whoever stood near the owner. Read this section before enabling it.
+
+- **Unit.** One utterance (a Nytka `segments` row) is one event, with the actor `me` for the wearer, the name the owner gave a voice, or the transcriber's label (`SPEAKER_01`, unique only within a conversation). One Nytka conversation is one thread, `nytka:<conversation id>`, and the segmenter groups its utterances as it does a chat. Measured on 2026-10-04: 4,448 utterances in 105 conversations became 456 segments, 91% substantive.
+- **What it reads.** Closed conversations only, resumed on `conversations.updated_at` with a 10-minute overlap. An AI title or summary does not move `updated_at` and is never read: the segment header says `[chat: Nytka]`, because a title is a model's inference and the header is embedded.
+- **Mute windows.** Nytka drops audio inside a mute window before transcription, but only audio captured after the window was saved. On 2026-10-04 all 350 utterances inside the configured window had been captured earlier. The adapter reads `mute.windows` and `user.timeZone` from Nytka's `settings` table and skips every utterance inside a window, including old ones. Unreadable windows fail the fetch instead of letting speech in.
+- **Deleted and excluded conversations.** See [Remove one Nytka conversation](operate.md#remove-one-nytka-conversation).
+- **Never leaves the box.** The source has no Hindsight bank: [migration 008](../../migrations/008_promotion_bankless.sql) keeps its facts, and any fact it supports, out of `v_promotable_facts`, and `enrich` never selects its segments, so none of its text goes to a hosted model. `doctor` prints `(not shown)` in place of a sample utterance.
+- **Role.** A PostgreSQL role with `SELECT` on `conversations`, `segments`, `people`, `person_voices` and `settings` only. `settings` holds six rows of server configuration and, by Nytka's own rule, no API key. The worker needs a route to `nytka-postgres`: the `nytka_net` network in [compose.sources.example.yaml](../../compose.sources.example.yaml).
+- **Tier.** Last (4), so the nightly run, which defaults to tier 2, does not read it until `TIER=4`. The ordering is the point of the tiers; what it did to retrieval on 2026-10-04 is in [CLAUDE.md](../../CLAUDE.md#status). Roadmap goal 3 (no secret reaches the index) gates tier 3, which tier 4 includes. Redaction already runs on every source, but it matches written credentials, and none of the 4,448 utterances read on 2026-10-04 held one; a password spoken aloud is not something it can see.
 
 ## Sources you cannot connect yet
 

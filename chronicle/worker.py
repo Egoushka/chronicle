@@ -693,6 +693,10 @@ def cmd_enrich(args) -> int:
                          FROM segment s JOIN source src ON src.source = s.sources[1]
                         WHERE s.enriched_at IS NULL AND s.is_substantive
                           AND src.density = 'narrative'
+                          -- A source with no Hindsight bank stays on the box:
+                          -- its text is never sent to a cloud model either
+                          -- (nytka is other people's speech).
+                          AND src.hindsight_bank IS NOT NULL
                           AND (%(threads)s::text[] IS NULL
                                OR s.thread_key = ANY(%(threads)s))
                           -- Gated-out segments leave the queue (so OFFSET

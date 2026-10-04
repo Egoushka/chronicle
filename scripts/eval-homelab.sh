@@ -9,11 +9,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 D=$(mktemp -d /var/tmp/chronicle-eval.XXXXXX)
 trap "rm -rf $D" EXIT
-docker exec chronicle-db psql -U chronicle -d chronicle -Atc \
+# EVAL_DB / EVAL_API point it at a throwaway copy of the archive and its own api
+# (an A/B against a source that is not in the live index yet).
+docker exec chronicle-db psql -U chronicle -d "${EVAL_DB:-chronicle}" -Atc \
   "COPY (SELECT source||':'||source_id, ts, replace(replace(text, E'\\n', ' '), E'\\t', ' ')
          FROM event ORDER BY ts) TO STDOUT" > "$D/dump.tsv"
 docker run --rm --network chronicle_default -v "$PWD":/app:ro -v "$D":/d -w /app \
   -e CHRONICLE_EVAL=/app/eval/questions.json python:3.12-slim sh -c "
     apt-get -qq update >/dev/null && apt-get -qq install -y ripgrep >/dev/null &&
     pip -q install --root-user-action=ignore httpx >/dev/null &&
-    python -m chronicle.evaluate compare --dump /d/dump.tsv --api http://chronicle-api:8030"
+    python -m chronicle.evaluate compare --dump /d/dump.tsv --api ${EVAL_API:-http://chronicle-api:8030}"

@@ -81,12 +81,28 @@ docker compose --profile batch run --rm chronicle-worker python -m chronicle.pur
 docker compose --profile batch run --rm chronicle-worker python -m chronicle.purge --apply
 ```
 
-Without `--apply` it only counts, per source: events, segments, embedded segments, entity mentions, facts, commitments, and commitments resolved by a doomed segment. `--source telegram` limits it to one source. The rules come from each adapter's `excluded_thread_keys()`, and today only `telegram` excludes anything: bot chats, the service account and `TELEGRAM_EXCLUDE_CHAT_IDS`.
+Without `--apply` it only counts, per source: events, segments, embedded segments, entity mentions, facts, commitments, and commitments resolved by a doomed segment. `--source telegram` limits it to one source. The rules come from each adapter's `excluded_thread_keys()`. `telegram` excludes bot chats, the service account and `TELEGRAM_EXCLUDE_CHAT_IDS`; `nytka` excludes `NYTKA_EXCLUDE_CONVERSATIONS` and conversations deleted upstream.
 
 `--apply` works in one transaction. It reopens commitments that a doomed segment resolved, prunes the doomed event ids from `life_event`, deletes the `projection_dep` rows, deletes the segments (their entity mentions, facts and commitments go with them), deletes the events, writes an `erasure_log` row with the rule and the counts, and then checks that nothing is left, rolling back if anything is. [purge-itest.py](../../scripts/purge-itest.py) runs this against a real database.
 
 > [!CAUTION]
 > `--apply` deletes events, segments, embeddings and facts for good. Chronicle has no undo; the source keeps its own copy. With no source configured, purge finds nothing and exits 0, which looks the same as a clean archive: check that the dry run lists your source first.
+
+## Remove one Nytka conversation
+
+Two routes, depending on whether Nytka should keep it.
+
+- **Delete it in Nytka too.** `DELETE /api/v1/conversations/<id>` on the Nytka server removes the conversation and its transcript for good (there is no tombstone). The next purge notices it is gone. It is gone only when its conversation row **and** all its segments are: Nytka merges two conversations that late audio bridges, deleting one row and moving its segments to the survivor, and purging that thread would erase speech that still exists and that no later ingest would bring back. A thread stays until the survivor is deleted too.
+- **Keep it in Nytka, leave it out of chronicle.** Add its id to `NYTKA_EXCLUDE_CONVERSATIONS` in `.env` (comma- or space-separated UUIDs). The next ingest skips it.
+
+Either way the rows already indexed stay until the purge runs:
+
+```bash title="Count, then delete"
+docker compose --profile batch run --rm chronicle-worker python -m chronicle.purge --source nytka
+docker compose --profile batch run --rm chronicle-worker python -m chronicle.purge --source nytka --apply
+```
+
+A mute window added later does not reach back: Nytka does not drop what it already transcribed, and chronicle's purge works on whole threads. Delete or exclude the conversations it should have covered. Muted audio captured after a window is saved never exists on the server, so there is nothing to remove.
 
 ## Redact secrets already stored
 

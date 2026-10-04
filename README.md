@@ -77,7 +77,7 @@ that followed are the ADRs in [docs/](docs).
 | 1 · core | `telegram` `wakapi` `dawarich` `calendar` | the archive is worth having with only these |
 | 2 · behaviour | `firefly` `lastfm` `forgejo` `jira` | what you *did*, as opposed to what you *said* |
 | 3 · artifact | `immich` `paperless` `gmail` `notion` `karakeep` `github` `linkedin` `slack` | things you made, saved or were sent |
-| 4 · ambient | `miniflux` `owntracks` | weak signal; first to go if precision drops |
+| 4 · ambient | `miniflux` `owntracks` `nytka` | weak signal; first to go if precision drops |
 
 The database-backed adapters read each app's own schema read-only: SQLite is
 opened with a `mode=ro` URI, and every query is checked by `doctor` before a
@@ -247,7 +247,7 @@ gitleaks, and require a GitHub noreply address; CI checks the same.
 ## Status
 
 Working: segmentation, gap fitting, cross-script entity resolution, intent
-routing, RRF fusion, bi-temporal facts, the source policy layer, 18 adapters,
+routing, RRF fusion, bi-temporal facts, the source policy layer, 19 adapters,
 doctor, the worker, the API, the MCP server, the evaluation harness and the
 erasure path. Every database-backed adapter has run against its real
 application's database on the reference deployment.

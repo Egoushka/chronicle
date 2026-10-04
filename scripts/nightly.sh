@@ -39,6 +39,14 @@ if [ -n "$pw" ] && [ -n "$DAWARICH_USER_ID" ]; then
   args+=(-e DAWARICH_DB_URL -e DAWARICH_USER_ID)
 fi
 
+# Nytka (tier 4, so only with TIER=4): a read-only role whose password belongs to
+# the nytka stack, read in place like the others. Without it the source is skipped.
+pw=$(val ../nytka/.env CHRONICLE_RO_PASSWORD)
+if [ -n "$pw" ]; then
+  export NYTKA_DB_URL="postgresql://chronicle_ro:$pw@nytka-postgres:5432/nytka"
+  args+=(-e NYTKA_DB_URL)
+fi
+
 # firefly's .env is shell-sourceable (doctor-homelab.sh sources it too).
 if [ -f ../firefly/.env ]; then
   ff=$(set -a; . ../firefly/.env; echo "$DB_USERNAME:$DB_PASSWORD@firefly-db:3306/$DB_DATABASE")
