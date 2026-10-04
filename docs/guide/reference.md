@@ -171,6 +171,8 @@ compose.yaml also sets `EMBED_DIM: "1024"` on the api. The code does not read it
 | `KARAKEEP_DB_PATH` | karakeep | path to the SQLite file |
 | `MINIFLUX_DB_URL` | miniflux | a PostgreSQL DSN |
 | `OWNTRACKS_STORE` | owntracks | the recorder's store directory |
+| `NYTKA_DB_URL` | nytka | a PostgreSQL DSN for a read-only role |
+| `NYTKA_EXCLUDE_CONVERSATIONS` | nytka | conversation ids to leave out, separated by commas or spaces |
 
 **Scripts.**
 

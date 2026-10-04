@@ -17,11 +17,30 @@ says so under **Upgrade**.
   `GATE_THRESHOLD` (0.42). Replay on 600 enriched segments: 97% of facts and
   commitments kept, 21% of calls skipped.
 - `ENRICH_RPM` (default 120) and `GATE_RPM` (default 300) cap calls a minute.
+- `nytka` source (tier 4, narrative): ambient speech from a Nytka server's
+  PostgreSQL, read in place over a read-only role (`NYTKA_DB_URL`). One
+  utterance is one event, one conversation one thread. It skips speech inside
+  the server's mute windows (the server applies them only to audio captured
+  after they were saved), excludes `NYTKA_EXCLUDE_CONVERSATIONS` and
+  conversations deleted upstream (not ones merged into another), and
+  `doctor` never prints an utterance. Measured before enabling: 71-question
+  eval 75.4% with and without it, with 456, 3,648 and 18,240 Nytka segments.
+- `evaluate` prints which source each `/recall` result came from;
+  `eval-homelab.sh` takes `EVAL_DB` and `EVAL_API` to run against a copy.
+
+### Changed
+- A source with no Hindsight bank (nytka, miniflux, owntracks) never reaches a
+  curated memory or a hosted model: `v_promotable_facts` leaves out its facts
+  and any fact it supports, and `enrich` does not select its segments.
 
 ### Upgrade
-- Apply `migrations/007_enrich_gate.sql` (`make migrate`): two columns.
+- Apply `migrations/007_enrich_gate.sql` and `migrations/008_promotion_bankless.sql`
+  (`make migrate`): two columns, and the view.
 - Nothing changes until `GATE_BACKEND` is set. The proxy needs
   `TYPESAFE_API_KEY` and a `GATE_KEY` virtual key first.
+- Nytka stays off until `NYTKA_DB_URL` is set, the worker is on the
+  `nytka_default` network (`compose.sources.example.yaml`), and the nightly run
+  uses `TIER=4`. Create the read-only role first.
 
 ## [0.7.0] - 2026-09-29
 

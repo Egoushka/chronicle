@@ -118,6 +118,11 @@ class Adapter(ABC):
     source: str
     density: Density = Density.DISCRETE
 
+    #: `doctor` prints the first event's text as a sample. False for a source
+    #: whose text is other people's speech: a preflight check must not echo it
+    #: into a terminal or a log.
+    show_sample: bool = True
+
     #: Only NARRATIVE sources get time-gap segmentation. A wakapi coding
     #: session or a dawarich stay is ALREADY an segment — its adapter did the
     #: aggregation. Gap-fitting them produces meaningless numbers (measured:

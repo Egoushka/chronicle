@@ -9,7 +9,7 @@ from .base import (ADAPTERS, Adapter, ApiAdapter, Density, FileAdapter,
 
 # Local databases and files
 from . import dawarich, firefly, forgejo, immich, karakeep  # noqa: F401
-from . import miniflux, owntracks, paperless, telegram, wakapi  # noqa: F401
+from . import miniflux, nytka, owntracks, paperless, telegram, wakapi  # noqa: F401
 
 # HTTP / MCP
 from . import api_sources  # noqa: F401

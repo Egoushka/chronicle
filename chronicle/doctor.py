@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .adapters import ADAPTERS, Density
+from .adapters.nytka import chronicle_index
 from .sources import BY_SOURCE, Tier, conflicts, enabled
 
 log = logging.getLogger(__name__)
@@ -131,6 +132,16 @@ def build(source: str):
     if source == "forgejo":
         dsn = _env("FORGEJO_DB_URL")
         return cls(dsn, author_email=_env("FORGEJO_EMAIL")) if dsn else None
+    if source == "nytka":
+        dsn = _env("NYTKA_DB_URL")
+        if not dsn:
+            return None
+        raw = _env("NYTKA_EXCLUDE_CONVERSATIONS") or ""
+        # The worker has CHRONICLE_DB_URL; the lookup is for erasure only, and
+        # without it `excluded_thread_keys` still returns the explicit list.
+        mine = _env("CHRONICLE_DB_URL")
+        return cls(dsn, exclude_conversation_ids=tuple(raw.replace(",", " ").split()),
+                   indexed=chronicle_index(mine) if mine else None)
     if source == "owntracks":
         root = _env("OWNTRACKS_STORE")
         return cls(root) if root else None
@@ -206,7 +217,7 @@ def check_source(source: str) -> Check:
                         "instead) — expected for a dormant source, suspicious for "
                         "telegram or wakapi")
     ts0 = rows[0].ts
-    sample = {"text": (rows[0].text or "")[:120],
+    sample = {"text": (rows[0].text or "")[:120] if ad.show_sample else "(not shown)",
               "ts": ts0.isoformat() if isinstance(ts0, datetime) else str(ts0),
               "kind": rows[0].kind, "thread_key": rows[0].thread_key}
     if problems:

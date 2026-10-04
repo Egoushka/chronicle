@@ -20,7 +20,8 @@ services:
     # The source networks give read access to databases that publish no host
     # port: dawarich_db (tier 1) and firefly-db (tier 2). `litellm` resolves
     # only on its own network.
-    networks: [default, dawarich_net, firefly_net, litellm_net]
+    # nytka_net reaches nytka-postgres, over a read-only role (tier 4).
+    networks: [default, dawarich_net, firefly_net, litellm_net, nytka_net]
 
 networks:
   dawarich_net:
@@ -32,6 +33,9 @@ networks:
   litellm_net:
     external: true
     name: litellm_default
+  nytka_net:
+    external: true
+    name: nytka_default
 
 volumes:
   # Owned by the wakapi stack; chronicle only reads it.

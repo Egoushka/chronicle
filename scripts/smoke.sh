@@ -25,7 +25,8 @@ if python3 -c "import psycopg, httpx" 2>/dev/null; then
     python3 scripts/worker-itest.py
     python3 scripts/resegment-itest.py
     python3 scripts/redact-itest.py
+    python3 scripts/nytka-itest.py
 else
-    echo "purge-itest, tally-itest, worker-itest, resegment-itest, redact-itest SKIPPED (no psycopg/httpx)"
+    echo "purge-itest, tally-itest, worker-itest, resegment-itest, redact-itest, nytka-itest SKIPPED (no psycopg/httpx)"
 fi
 echo "smoke OK"
