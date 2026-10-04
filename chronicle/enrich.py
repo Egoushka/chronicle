@@ -161,9 +161,11 @@ class Client:
     """One OpenAI-compatible chat endpoint. LiteLLM in production, a stub in
     scripts/worker-itest.py."""
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(self, base_url: str, api_key: str, model: str, rpm: float = 0):
         import httpx
+        from .gate import RateLimiter
         self.model = model
+        self.limiter = RateLimiter(rpm)
         self.http = httpx.Client(base_url=base_url.rstrip("/"), timeout=90,
                                  headers={"Authorization": f"Bearer {api_key}"})
 
@@ -172,7 +174,10 @@ class Client:
         model = os.environ.get("ENRICH_MODEL", "")
         key = os.environ.get("LITELLM_API_KEY", "")
         url = os.environ.get("ENRICH_URL") or os.environ.get("LITELLM_BASE_URL", "")
-        return cls(url, key, model) if model and key and url else None
+        # ENRICH_RPM caps calls a minute; the 2026-09-29 run made ~895 and
+        # overshot its $10 key by 75%. 120 is ~$3.20 an hour at that day's price.
+        rpm = float(os.environ.get("ENRICH_RPM") or 120)
+        return cls(url, key, model, rpm) if model and key and url else None
 
     def extract(self, chat: str, started_at: datetime, text: str,
                 predicates: list[str]) -> dict:
@@ -182,6 +187,7 @@ class Client:
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": prompt}]}
         for attempt in (1, 2):
+            self.limiter.wait()
             r = self.http.post("/chat/completions", json=body)
             # One retry for the transient class only; a 4xx other than 429 is
             # a bug or a bad key and retrying it just doubles the bill.

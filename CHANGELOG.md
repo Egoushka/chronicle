@@ -8,6 +8,21 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+### Added
+- Pre-extraction gate for enrichment (`chronicle/gate.py`): `GATE_BACKEND=none|jev|chat`,
+  default `none`. `jev` is TypeSafe's Jev through LiteLLM's `/typesafe`
+  pass-through; `chat` is any LiteLLM chat model. Scores land in
+  `segment.gate_p` / `gate_version` and are reused. `GATE_SKIP=0` (default) is
+  shadow mode: score, still extract. `GATE_SKIP=1` skips segments under
+  `GATE_THRESHOLD` (0.42). Replay on 600 enriched segments: 97% of facts and
+  commitments kept, 21% of calls skipped.
+- `ENRICH_RPM` (default 120) and `GATE_RPM` (default 300) cap calls a minute.
+
+### Upgrade
+- Apply `migrations/007_enrich_gate.sql` (`make migrate`): two columns.
+- Nothing changes until `GATE_BACKEND` is set. The proxy needs
+  `TYPESAFE_API_KEY` and a `GATE_KEY` virtual key first.
+
 ## [0.7.0] - 2026-09-29
 
 Goals 6, 7 and 8 of ROADMAP.md: the lookup misses are explained, enrichment is

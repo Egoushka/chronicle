@@ -564,7 +564,8 @@ def _update_segment(cur, segment_id: int, fields: tuple) -> None:
                   source_event_ids = %s, raw_text = %s, embed_text = %s,
                   is_substantive = %s, segmenter_version = %s,
                   embedding = NULL, lemmatized_text = NULL,
-                  embedder_version = NULL, enriched_at = NULL
+                  embedder_version = NULL, enriched_at = NULL,
+                  gate_p = NULL, gate_version = NULL
             WHERE segment_id = %s""", (*fields, segment_id))
 
 
@@ -646,6 +647,13 @@ def cmd_enrich(args) -> int:
     thread keys) restricts a run to those threads, for the A/B in goal 7.
     Enrichment lands in `segment.enrich_text`; the embedding is untouched.
 
+    With GATE_BACKEND set (chronicle/gate.py) each segment is scored first and
+    the score kept in `segment.gate_p`, reused by later runs. GATE_SKIP=0
+    (default) is shadow mode: score, log, extract anyway. GATE_SKIP=1 skips
+    segments scoring under GATE_THRESHOLD; they stay unenriched and out of
+    later runs' selection until the threshold or gate version changes.
+    ENRICH_RPM and GATE_RPM cap calls a minute.
+
     A failed call leaves that segment unenriched and it is retried next run.
     ponytail: a segment the model can never answer is retried every night;
     add a failure counter if the log shows the same ids recurring.
@@ -653,6 +661,7 @@ def cmd_enrich(args) -> int:
     from concurrent.futures import ThreadPoolExecutor
 
     from .enrich import Client
+    from .gate import Gate
 
     client = Client.from_env()
     if client is None:
@@ -661,6 +670,11 @@ def cmd_enrich(args) -> int:
     limit = int(os.environ.get("ENRICH_LIMIT", "2000"))
     workers = int(os.environ.get("ENRICH_CONCURRENCY", "8"))
     threads = [t for t in os.environ.get("ENRICH_THREADS", "").split(",") if t] or None
+    gate = Gate.from_env()
+    skipping = gate is not None and gate.skip
+    if gate:
+        log.info("gate %s, threshold %.2f, %s", gate.version, gate.threshold,
+                 "skipping" if skipping else "shadow (still extracting)")
 
     conn = connect()
     with conn.cursor() as cur:
@@ -669,27 +683,44 @@ def cmd_enrich(args) -> int:
     if not predicates:
         raise SystemExit("fact_predicate is empty — apply migrations/005_incremental.sql")
 
-    done = failed = 0
+    done = failed = skipped = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
         while done + failed < limit:
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT s.segment_id, s.thread_key, s.started_at, s.ended_at,
-                              s.raw_text, s.source_event_ids
+                              s.raw_text, s.source_event_ids, s.gate_p, s.gate_version
                          FROM segment s JOIN source src ON src.source = s.sources[1]
                         WHERE s.enriched_at IS NULL AND s.is_substantive
                           AND src.density = 'narrative'
                           AND (%(threads)s::text[] IS NULL
                                OR s.thread_key = ANY(%(threads)s))
+                          -- Gated-out segments leave the queue (so OFFSET
+                          -- still counts only failures); a new gate version
+                          -- or a lower threshold brings them back.
+                          AND (%(gv)s::text IS NULL OR s.gate_p IS NULL
+                               OR s.gate_version IS DISTINCT FROM %(gv)s
+                               OR s.gate_p >= %(th)s::real)
                         ORDER BY s.started_at DESC
                         LIMIT %(n)s OFFSET %(off)s""",
                     {"threads": threads, "n": min(workers * 8, limit - done - failed),
-                     "off": failed})
+                     "off": failed, "gv": gate.version if skipping else None,
+                     "th": gate.threshold if gate else None})
                 rows = cur.fetchall()
                 # (OFFSET skips this run's failures, which stay unenriched.)
                 chats = {r[0]: _chat_and_people(cur, r[5], r[1]) for r in rows}
             if not rows:
                 break
+
+            if gate:
+                try:
+                    rows, n_skipped = _apply_gate(conn, pool, gate, rows)
+                except RuntimeError as exc:
+                    log.error("gate: %s", exc)
+                    return 1
+                skipped += n_skipped
+                if not rows:
+                    continue        # all gated out; they left the queue
 
             def call(r):
                 try:
@@ -703,7 +734,7 @@ def cmd_enrich(args) -> int:
                 if reply is None:
                     failed += 1
                     continue
-                _write_enrichment(conn, r, reply, set(predicates), *chats[r[0]])
+                _write_enrichment(conn, r[:6], reply, set(predicates), *chats[r[0]])
                 done += 1
                 batch_ok += 1
             if not batch_ok:
@@ -717,9 +748,50 @@ def cmd_enrich(args) -> int:
             with conn.cursor() as cur:
                 cur.execute("SELECT resolve_fact_conflicts()")
             conn.commit()
-            log.info("enriched %d (%d failed)", done, failed)
+            log.info("enriched %d (%d failed, %d gated out)", done, failed, skipped)
 
     return 0
+
+
+def _apply_gate(conn, pool, gate, rows: list) -> tuple[list, int]:
+    """Score the rows the gate has not seen (or saw under another version),
+    store the scores, and return (rows to extract, count skipped).
+
+    A single failed score lets that segment through: the gate saves money, it
+    must never cost a memory. A whole batch failing is the gate's endpoint
+    (a rotated GATE_KEY, no TYPESAFE_API_KEY on the proxy), so it raises
+    instead of quietly extracting everything ungated.
+    """
+    todo = [r for r in rows if r[6] is None or r[7] != gate.version]
+
+    def score(r):
+        try:
+            return r, gate.backend.score(r[4])
+        except Exception as exc:                            # noqa: BLE001
+            log.warning("gate segment %s failed: %s", r[0], exc)
+            return r, None
+
+    scores = {r[0]: r[6] for r in rows if r[6] is not None and r[7] == gate.version}
+    if todo:
+        results = list(pool.map(score, todo))
+        if all(p is None for _, p in results):
+            raise RuntimeError(f"all {len(todo)} calls in a batch failed — check "
+                               "GATE_URL, GATE_KEY and the proxy's TYPESAFE_API_KEY")
+        with conn.cursor() as cur:
+            for r, p in results:
+                if p is not None:
+                    scores[r[0]] = p
+                    cur.execute("UPDATE segment SET gate_p = %s, gate_version = %s"
+                                " WHERE segment_id = %s", (p, gate.version, r[0]))
+        conn.commit()
+
+    below = [r for r in rows if r[0] in scores and not gate.keeps(scores[r[0]])]
+    log.info("gate: %d of %d under %.2f (%d scored now)%s", len(below), len(rows),
+             gate.threshold, len(todo), "" if gate.skip else " — shadow, extracting all")
+    if not gate.skip:
+        return rows, 0
+    drop = {r[0] for r in below}
+    return [r for r in rows if r[0] not in drop], len(drop)
 
 
 def _chat_and_people(cur, keys: list[str], thread_key: str) -> tuple[str, list[str]]:

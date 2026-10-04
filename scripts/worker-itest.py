@@ -108,10 +108,20 @@ REPLY = {"summary": "Anna and Sam planned the move to Lviv.",
 
 class Stub(BaseHTTPRequestHandler):
     calls = 0
+    gate_calls = 0
+    gate_p = 0.9
 
     def do_POST(self):
-        Stub.calls += 1
         self.rfile.read(int(self.headers["Content-Length"]))
+        if self.path.endswith("/typesafe/v1/systemone"):      # the Jev gate
+            Stub.gate_calls += 1
+            body = json.dumps({"answers": {"keep": {"noul": Stub.gate_p}}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        Stub.calls += 1
         body = json.dumps({"choices": [{"message": {"content":
                            "```json\n" + json.dumps(REPLY) + "\n```"}}]}).encode()
         self.send_response(200)
@@ -267,6 +277,36 @@ def run() -> int:
     check("dead endpoint: nothing half-written",
           q("SELECT count(*) FROM segment WHERE enriched_at IS NULL")[0][0], 1)
     os.environ["ENRICH_URL"] = f"http://127.0.0.1:{srv.server_port}/v1"
+
+    # --- gate (chronicle/gate.py) ------------------------------------------
+    # One unenriched segment is left. Shadow mode scores and still extracts;
+    # skip mode leaves a low score unextracted AND out of the next run's queue.
+    os.environ.update(GATE_BACKEND="jev", GATE_KEY="g", GATE_THRESHOLD="0.5",
+                      GATE_URL=f"http://127.0.0.1:{srv.server_port}/typesafe/v1/systemone")
+    Stub.calls = Stub.gate_calls = 0
+    Stub.gate_p = 0.2
+    worker.cmd_enrich(args)
+    check("gate shadow: low score, still extracted", Stub.calls, 1)
+    check("gate shadow: score and version stored",
+          q("SELECT abs(gate_p - 0.2) < 1e-6, gate_version LIKE 'jev:jev-latest:noul-%%'"
+            " FROM segment WHERE gate_p IS NOT NULL ORDER BY gate_p LIMIT 1")[0],
+          (True, True))
+    q_open = "SELECT count(*) FROM segment WHERE enriched_at IS NULL"
+    with psycopg.connect(URL, autocommit=True) as c:
+        c.execute("UPDATE segment SET enriched_at = NULL WHERE gate_p IS NOT NULL")
+    Stub.calls = Stub.gate_calls = 0
+    os.environ["GATE_SKIP"] = "1"
+    worker.cmd_enrich(args)
+    check("gate skip: cached score reused, no gate call", Stub.gate_calls, 0)
+    check("gate skip: below threshold, no extraction", Stub.calls, 0)
+    check("gate skip: segment stays unenriched", q(q_open)[0][0], 1)
+    Stub.gate_p = 0.9
+    os.environ["GATE_THRESHOLD"] = "0.1"                # lower threshold re-admits it
+    worker.cmd_enrich(args)
+    check("gate skip: lowered threshold extracts it", Stub.calls, 1)
+    check("gate skip: nothing left open", q(q_open)[0][0], 0)
+    for k in ("GATE_BACKEND", "GATE_SKIP", "GATE_KEY", "GATE_URL", "GATE_THRESHOLD"):
+        del os.environ[k]
 
     srv.shutdown()
     width = max(len(c[0]) for c in checks)
