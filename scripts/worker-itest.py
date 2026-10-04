@@ -237,11 +237,13 @@ def run() -> int:
           q("SELECT topics FROM segment ORDER BY started_at LIMIT 1")[0][0],
           ["relocation", "apartment"])
     check("enrich: importance clamped to 1", q("SELECT max(importance) FROM segment")[0][0], 1.0)
-    check("enrich: facts concatenated onto embed_text",
-          q("""SELECT bool_and(embed_text LIKE '%%|| facts: Anna lives in Lviv%%')
+    check("enrich: facts land in enrich_text",
+          q("""SELECT bool_and(enrich_text LIKE '%%Anna lives in Lviv%%')
                  FROM segment""")[0][0], True)
-    check("enrich: and the embedding cleared for re-encode",
-          q("SELECT count(*) FROM segment WHERE embedding IS NULL")[0][0], 2)
+    check("enrich: embed_text left as it was",
+          q("SELECT bool_and(embed_text NOT LIKE '%%|| facts:%%') FROM segment")[0][0], True)
+    check("enrich: and the embedding kept",
+          q("SELECT count(*) FROM segment WHERE embedding IS NULL")[0][0], 0)
 
     # A text change re-opens the segment; re-enriching must REPLACE its facts.
     tg.transcribe(4, "[voice] трикімнатна за вісімсот, без меблів")
