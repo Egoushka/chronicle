@@ -8,6 +8,8 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-04
+
 ### Added
 - `/recall` takes `"rerank": true`: a chat model (`RERANK_MODEL`, through
   LiteLLM with chronicle's own key) reorders the top `RERANK_POOL` (40)
