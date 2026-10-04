@@ -8,6 +8,16 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+### Added
+- `/recall` takes `"rerank": true`: a chat model (`RERANK_MODEL`, through
+  LiteLLM with chronicle's own key) reorders the top `RERANK_POOL` (40)
+  segments and the best `limit` are returned. Off by default, and ignored when
+  `RERANK_MODEL` is unset; any failure keeps retrieval order. `evaluate
+  --rerank` measures it. Not yet evaluated.
+
+### Upgrade
+- Nothing changes until `RERANK_MODEL` is set in `.env` and a caller asks.
+
 ## [0.7.1] - 2026-10-04
 
 The pre-extraction gate and the `nytka` source (off until configured).

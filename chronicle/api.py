@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from . import rerank as rerank_mod
 from .embed import Embedder, Lemmatizer
 from .rank import reciprocal_rank_fusion  # noqa: F401  (used by SQL-side RRF parity tests)
 from .route import route, window
@@ -164,6 +165,7 @@ class RecallReq(BaseModel):
     source: str | None = None
     limit: int = 20          # Anthropic measured top-20 > top-10 > top-5
     enrich: bool = False     # fuse the enrichment list (migration 006); A/B switch
+    rerank: bool = False     # a chat model reorders the top RERANK_POOL; see rerank.py
 
 
 @app.post("/recall")
@@ -176,6 +178,10 @@ def recall(req: RecallReq):
     if named:
         req.date_from, req.date_to = named
     vec = _state["embedder"].encode_one(req.query).tolist()
+    # The reranker needs a deeper pool than it returns: 3 of the 7 missed
+    # lookups sat at rank 33-80, out of reach of a reorder of the top 20.
+    rr = rerank_mod.from_env() if req.rerank else None
+    pool = max(req.limit, int(os.environ.get("RERANK_POOL", "40"))) if rr else req.limit
     rows = q("""SELECT h.segment_id, h.rrf_score, e.started_at, e.thread_key,
                        e.raw_text, e.source_event_ids, e.summary
                 FROM hybrid_search(%s::halfvec, %s, %s, %s, NULL, %s, 100, %s,
@@ -183,8 +189,14 @@ def recall(req: RecallReq):
                 JOIN segment e USING (segment_id)
                 ORDER BY h.rrf_score DESC""",
              (vec, req.query, req.date_from, req.date_to,
-              [req.source] if req.source else None, req.limit, req.enrich))
+              [req.source] if req.source else None, pool, req.enrich))
+    reranked = False
+    if rr and len(rows) > 1:
+        ordered = rerank_mod.rerank(rr, req.query, rows, text_of=lambda r: r[4])
+        reranked = ordered != rows
+        rows = ordered[:req.limit]
     return {
+        "reranked": reranked,
         "intent": intent.kind,
         "routed_because": intent.matched_pattern,
         "window_from_query": [d.isoformat() for d in named] if named else None,

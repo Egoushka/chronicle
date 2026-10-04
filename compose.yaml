@@ -61,6 +61,11 @@ services:
       # raw archive. The api makes no LLM call today, so both are optional.
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000/v1}
       LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      # /recall {"rerank": true}: a chat model reorders the top RERANK_POOL
+      # (rerank.py). Unset RERANK_MODEL and the flag is ignored.
+      RERANK_MODEL: ${RERANK_MODEL:-}
+      RERANK_POOL: ${RERANK_POOL:-40}
+      RERANK_RPM: ${RERANK_RPM:-120}
 
     volumes:
       # Model cache. Without this every restart re-downloads ~2.2 GB of BGE-M3.

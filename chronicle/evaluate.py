@@ -180,8 +180,8 @@ def grep_answerer(dump: Path, limit: int = BUDGET) -> Callable[[Question], Group
     return answer
 
 
-def chronicle_answerer(base_url: str, enrich: bool = False
-                       ) -> Callable[[Question], Groups]:
+def chronicle_answerer(base_url: str, enrich: bool = False,
+                       rerank: bool = False) -> Callable[[Question], Groups]:
     import httpx
     client = httpx.Client(base_url=base_url, timeout=120.0)
     #: Which source holds each /recall result, over every lookup question. A
@@ -225,7 +225,7 @@ def chronicle_answerer(base_url: str, enrich: bool = False
                       for b in bins if i < len(b)]
             return _within_budget(ranked, BUDGET)
         r = client.post("/recall", json={"query": qn.question, "limit": 20,
-                                        "enrich": enrich})
+                                        "enrich": enrich, "rerank": rerank})
         r.raise_for_status()
         hits = [hit["evidence"] for hit in r.json()["results"]]
         slots.update(g[0].split(":")[0] for g in hits if g)
@@ -253,6 +253,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--api", default="http://localhost:8030")
     ap.add_argument("--enrich", action="store_true",
                     help="fuse the enrichment list into /recall (goal 7 A/B)")
+    ap.add_argument("--rerank", action="store_true",
+                    help="have a chat model reorder /recall's pool (rerank.py)")
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
 
@@ -287,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         res_grep = score(qs, grep_answerer(Path(args.dump)))
         report("ripgrep baseline", res_grep)
     if args.command in ("chronicle", "compare"):
-        answerer = chronicle_answerer(args.api, args.enrich)
+        answerer = chronicle_answerer(args.api, args.enrich, args.rerank)
         res_chr = score(qs, answerer)
         report("chronicle", res_chr)
         total = sum(answerer.slots.values())
