@@ -8,6 +8,10 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-04
+
+The pre-extraction gate and the `nytka` source (off until configured).
+
 ### Added
 - Pre-extraction gate for enrichment (`chronicle/gate.py`): `GATE_BACKEND=none|jev|chat`,
   default `none`. `jev` is TypeSafe's Jev through LiteLLM's `/typesafe`
