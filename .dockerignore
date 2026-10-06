@@ -1,0 +1,11 @@
+# The image copies chronicle/ and migrations/ only; keep the rest out of the
+# build context (models/ holds the downloaded weights).
+.git
+models/
+eval/
+docs/
+tests/
+.venv/
+**/__pycache__/
+.env
+*.env

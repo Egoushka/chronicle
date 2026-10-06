@@ -12,6 +12,10 @@
 
 services:
   chronicle-api:
+    # One image for api and worker (it holds torch, ~GB): built or pulled once,
+    # never twice. Deploy by setting CHRONICLE_VERSION in .env to a release tag
+    # and `docker compose pull`; unset, `up` builds it locally as :local.
+    image: ghcr.io/egoushka/chronicle:${CHRONICLE_VERSION:-local}
     build: .
     container_name: chronicle-api
     restart: unless-stopped
@@ -112,6 +116,7 @@ services:
     networks: [default]  # nothing here authenticates: never a shared network
 
   chronicle-mcp:
+    image: ghcr.io/egoushka/chronicle-mcp:${CHRONICLE_VERSION:-local}
     build:
       context: .
       dockerfile: Dockerfile.mcp
@@ -161,7 +166,8 @@ services:
   # checkpoints, and exits. An OOM kill costs one batch, not the run.
   # ---------------------------------------------------------------------------
   chronicle-worker:
-    build: .
+    # Same image as chronicle-api, so it has no build of its own.
+    image: ghcr.io/egoushka/chronicle:${CHRONICLE_VERSION:-local}
     container_name: chronicle-worker
     restart: "no"
     command: ["python", "-m", "chronicle.worker"]
