@@ -8,6 +8,8 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-06
+
 ### Changed
 - chronicle-api and chronicle-worker share one image, `ghcr.io/egoushka/chronicle`
   (api builds it, worker only references it); they used to build two identical
