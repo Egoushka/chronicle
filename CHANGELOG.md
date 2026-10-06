@@ -8,6 +8,19 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+### Changed
+- chronicle-api and chronicle-worker share one image, `ghcr.io/egoushka/chronicle`
+  (api builds it, worker only references it); they used to build two identical
+  ~10 GB images. torch now comes from the CPU wheel index, pip layers use a
+  BuildKit cache mount, and a `.dockerignore` keeps `models/` out of the build context.
+- A tag push publishes `ghcr.io/egoushka/chronicle` and `chronicle-mcp` (new
+  `.github/workflows/image.yml`; PRs build without pushing).
+
+### Upgrade
+- Optional: set `CHRONICLE_VERSION=X.Y.Z` in `.env` and `docker compose pull`
+  to run the published image instead of building. Unset, behaviour is unchanged
+  (`up` builds `:local`).
+
 ## [0.7.2] - 2026-10-04
 
 ### Added

@@ -9,7 +9,7 @@ ENV PYTHONUNBUFFERED=1
 # with `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. The next
 # major can break the same way, and porting to it is deliberate work, not
 # something an image rebuild should do silently. Ported to 2.x against 2.2.0.
-RUN pip install --no-cache-dir 'mcp>=2.2,<3' httpx
+RUN --mount=type=cache,target=/root/.cache/pip pip install 'mcp>=2.2,<3' httpx
 COPY chronicle/ ./chronicle/
 EXPOSE 8031
 CMD ["python", "-m", "chronicle.mcp_server"]
