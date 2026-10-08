@@ -2,7 +2,8 @@
 from datetime import date
 
 from chronicle import enrich
-from chronicle.enrich import MAX_FACTS, PROMPT, _owner_from_env, clean, fact_line
+from chronicle.enrich import (DEFAULT_MESSAGES, MAX_FACTS, PROMPT_NAME, _owner_from_env,
+                              clean, fact_line)
 
 PREDICATES = {"lives_in", "plans", "likes"}
 
@@ -73,8 +74,3 @@ def test_empty_reply_is_a_valid_answer():
 def test_fact_line_reads_as_text():
     assert fact_line({"subject": "Anna", "predicate": "lives_in", "object": "Lviv"}) \
         == "Anna lives in Lviv"
-
-
-def test_prompt_formats():
-    # Literal JSON braces in the template must be escaped for str.format.
-    PROMPT.format(predicates="a, b", chat="c", owner="o", date="d", text="t")

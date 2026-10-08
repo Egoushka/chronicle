@@ -190,6 +190,14 @@ services:
       # Calls a minute to LiteLLM. Unbounded, the 2026-09-29 run made ~895 a
       # minute, took its $10 key to $17.54 and the box's $50 budget to 96%.
       ENRICH_RPM: ${ENRICH_RPM:-120}
+      # The enrich prompt (`chronicle/enrich`, chat type) is read from Langfuse
+      # (chronicle/prompts.py), label PROMPT_LABEL. Any of the three unset, or
+      # Langfuse unreachable: the text embedded in enrich.py is used. Reaching
+      # it needs the worker on Langfuse's network (compose.sources.example.yaml).
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      PROMPT_LABEL: ${PROMPT_LABEL:-production}
       # Pre-extraction gate (chronicle/gate.py): none | jev | chat. Off by
       # default. GATE_KEY, a dedicated LiteLLM virtual key, goes in .env.
       # GATE_SKIP=0 scores and still extracts (shadow); 1 skips low scores.
