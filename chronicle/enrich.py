@@ -30,6 +30,8 @@ import re
 from collections.abc import Mapping
 from datetime import date, datetime
 
+from . import prompts
+
 log = logging.getLogger("chronicle.enrich")
 
 EXTRACTOR_VERSION = "enrich-2026.09-v1"
@@ -58,29 +60,36 @@ def _owner_from_env(env: Mapping[str, str]) -> tuple[str, frozenset[str]]:
 
 OWNER, _OWNER_ALIASES = _owner_from_env(os.environ)
 
-PROMPT = """You read one excerpt of {owner}'s private Telegram chats and extract \
-structured memory. Lines are "sender: text". The sender "me" is {owner}.
+PROMPT_NAME = "chronicle/enrich"
+
+#: Embedded fallback for the Langfuse prompt `chronicle/enrich` (chat, two
+#: messages). The system message is identical for every call of a deployment
+#: (owner and predicates are fixed), so the provider's prompt cache hits on it;
+#: everything that changes per call sits in the user message, text last.
+DEFAULT_MESSAGES = [
+    {"role": "system", "content": """You read one excerpt of {{owner}}'s private Telegram chats and extract \
+structured memory. Lines are "sender: text". The sender "me" is {{owner}}.
 
 Return ONE JSON object with exactly these keys:
   "summary":      1-2 sentences, in the excerpt's main language, what happened.
   "topics":       up to 6 short lowercase English topic labels.
-  "importance":   0.0-1.0, how much this would matter to {owner} a year later.
+  "importance":   0.0-1.0, how much this would matter to {{owner}} a year later.
   "sentiment":    -1.0 (negative) to 1.0 (positive), the overall tone.
   "facts":        durable facts stated or clearly implied, each
-                  {{"subject": person name ("{owner}" for the owner), "predicate": one of
-                  [{predicates}], "object": short value, "confidence": 0.0-1.0}}.
+                  {"subject": person name ("{{owner}}" for the owner), "predicate": one of
+                  [{{predicates}}], "object": short value, "confidence": 0.0-1.0}.
                   Only facts about people's lives, never about the chat itself.
-  "commitments":  promises to do something later, each {{"text": what was
-                  promised, "direction": "i_owe" if {owner} promised,
-                  "owed_to_me" if someone promised {owner}, "due": "YYYY-MM-DD"
-                  or null, "confidence": 0.0-1.0}}.
+  "commitments":  promises to do something later, each {"text": what was
+                  promised, "direction": "i_owe" if {{owner}} promised,
+                  "owed_to_me" if someone promised {{owner}}, "due": "YYYY-MM-DD"
+                  or null, "confidence": 0.0-1.0}.
 
-Empty lists are the right answer for small talk. Do not invent.
+Empty lists are the right answer for small talk. Do not invent."""},
+    {"role": "user", "content": """Chat: {{chat}}
+Date: {{date}}
 
-Chat: {chat}
-Date: {date}
-
-{text}"""
+{{text}}"""},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +190,11 @@ class Client:
 
     def extract(self, chat: str, started_at: datetime, text: str,
                 predicates: list[str]) -> dict:
-        prompt = PROMPT.format(predicates=", ".join(predicates), chat=chat, owner=OWNER,
-                               date=f"{started_at:%Y-%m-%d %A}", text=text[:8000])
+        messages = prompts.render(
+            PROMPT_NAME, DEFAULT_MESSAGES, predicates=", ".join(predicates), chat=chat,
+            owner=OWNER, date=f"{started_at:%Y-%m-%d %A}", text=text[:8000])
         body = {"model": self.model, "temperature": 0,
-                "response_format": {"type": "json_object"},
-                "messages": [{"role": "user", "content": prompt}]}
+                "response_format": {"type": "json_object"}, "messages": messages}
         for attempt in (1, 2):
             self.limiter.wait()
             r = self.http.post("/chat/completions", json=body)

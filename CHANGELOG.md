@@ -8,6 +8,22 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-08
+
+### Changed
+- The enrich prompt is two messages instead of one: a system message (instructions,
+  owner, predicates; identical for every call of a deployment, so the provider's
+  prompt cache can hit) and a user message (chat, date with weekday, text last).
+  Output format and wording are unchanged.
+- The worker reads that prompt from Langfuse (`chronicle/enrich`, chat type, label
+  `production`, 5 min cache) and logs `prompt=chronicle/enrich@<version>`. Without
+  keys, or with Langfuse unreachable, it uses the embedded copy in `enrich.py`.
+
+### Upgrade
+- Optional: set `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` in `.env`
+  and add `langfuse_net` to the worker (see `compose.sources.example.yaml`). Unset,
+  behaviour is the same as 0.7.3.
+
 ## [0.7.3] - 2026-10-06
 
 ### Changed

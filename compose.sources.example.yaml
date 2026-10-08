@@ -21,7 +21,8 @@ services:
     # port: dawarich_db (tier 1) and firefly-db (tier 2). `litellm` resolves
     # only on its own network.
     # nytka_net reaches nytka-postgres, over a read-only role (tier 4).
-    networks: [default, dawarich_net, firefly_net, litellm_net, nytka_net]
+    # langfuse_net lets the worker fetch its prompt (LANGFUSE_HOST=http://langfuse-web:3000).
+    networks: [default, dawarich_net, firefly_net, litellm_net, nytka_net, langfuse_net]
 
 networks:
   dawarich_net:
@@ -36,6 +37,9 @@ networks:
   nytka_net:
     external: true
     name: nytka_default
+  langfuse_net:
+    external: true
+    name: langfuse_default
 
 volumes:
   # Owned by the wakapi stack; chronicle only reads it.
