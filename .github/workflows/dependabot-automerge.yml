@@ -1,0 +1,82 @@
+name: dependabot-automerge
+
+# Squash-merges Dependabot patch and minor bumps once every other check on the PR is green.
+# Majors, 0.x minors and PRs without update metadata stay open for a human.
+# Self-contained on purpose: engineering-standards is private, so public repos cannot call a reusable
+# workflow from it. Copy this file to .github/workflows/ and keep it identical across repos.
+# Needs "Allow auto-merge" and "Allow squash merging" on in the repo's settings. A merge made with
+# GITHUB_TOKEN does not trigger push workflows on main (deploy, release); those wait for the next human merge.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+      SELF: ${{ github.workflow }}
+    steps:
+      - name: Classify the update
+        id: classify
+        run: |
+          # Dependabot writes one update-type per dependency into its commit message; a group has several.
+          msg=$(gh api --paginate "repos/$REPO/pulls/$PR/commits" -q '.[].commit.message')
+          types=$(grep -E '^[[:space:]]*update-type:' <<<"$msg" | sed 's/.*update-type:[[:space:]]*//' | sort -u)
+          zero_minor=$(awk '
+            /dependency-version:/ { v = $2; gsub(/"/, "", v) }
+            /update-type: version-update:semver-minor/ && v ~ /^0\./ { print v }
+          ' <<<"$msg")
+          echo "update types: ${types:-none}"
+          if [ -z "$types" ] || grep -qvE '^version-update:semver-(patch|minor)$' <<<"$types"; then
+            echo "Not a patch/minor-only update; leaving it for a human."
+            echo "merge=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "$zero_minor" ]; then
+            echo "0.x minor bump ($zero_minor) can break; leaving it for a human."
+            echo "merge=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for the other checks, then merge
+        if: steps.classify.outputs.merge == 'true'
+        run: |
+          stable=0
+          for _ in $(seq 1 100); do
+            checks=$(gh pr checks "$PR" -R "$REPO" --json workflow,bucket 2>/dev/null || echo '[]')
+            others=$(jq --arg self "$SELF" '[.[] | select(.workflow != $self)]' <<<"$checks")
+            total=$(jq length <<<"$others")
+            bad=$(jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' <<<"$others")
+            pending=$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$others")
+            if [ "$bad" -gt 0 ]; then
+              echo "::error::$bad check(s) failed; not merging."
+              exit 1
+            fi
+            if [ "$total" -gt 0 ] && [ "$pending" -eq 0 ]; then
+              stable=$((stable + 1))
+            else
+              stable=0
+            fi
+            # Two green polls in a row: a workflow that registers late must not be missed.
+            if [ "$stable" -ge 2 ]; then
+              gh pr merge "$PR" -R "$REPO" --squash || gh pr merge "$PR" -R "$REPO" --squash --auto
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::checks did not settle in time; not merging."
+          exit 1
