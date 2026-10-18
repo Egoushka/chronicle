@@ -29,7 +29,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number }}
-      SELF: ${{ github.workflow }}
+      SHA: ${{ github.event.pull_request.head.sha }}
+      JOB: ${{ github.job }}
     steps:
       - name: Classify the update
         id: classify
@@ -57,11 +58,12 @@ jobs:
         run: |
           stable=0
           for _ in $(seq 1 100); do
-            checks=$(gh pr checks "$PR" -R "$REPO" --json workflow,bucket 2>/dev/null || echo '[]')
-            others=$(jq --arg self "$SELF" '[.[] | select(.workflow != $self)]' <<<"$checks")
-            total=$(jq length <<<"$others")
-            bad=$(jq '[.[] | select(.bucket == "fail" or .bucket == "cancel")] | length' <<<"$others")
-            pending=$(jq '[.[] | select(.bucket == "pending")] | length' <<<"$others")
+            # Check runs of the PR head, minus this job. REST, with errors left visible in the log.
+            runs=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" --jq '[.check_runs[] | select(.name != env.JOB)]')
+            total=$(jq length <<<"$runs")
+            pending=$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")
+            bad=$(jq '[.[] | select(.status == "completed" and (.conclusion | IN("failure", "cancelled", "timed_out", "action_required", "startup_failure")))] | length' <<<"$runs")
+            echo "checks: total=$total pending=$pending failed=$bad"
             if [ "$bad" -gt 0 ]; then
               echo "::error::$bad check(s) failed; not merging."
               exit 1
