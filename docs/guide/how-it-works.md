@@ -133,3 +133,7 @@ One name can be written in Russian, Ukrainian and Latin letters, and those spell
 The skeleton over-merges on purpose, so it can only propose candidates, never decide. In the pipeline, `enrich` finds or creates a person entity for each fact's subject by its phonetic key, and stores the skeleton without acting on it. `resolution_candidates()`, which uses both keys and blocks candidates by chat, is written and tested in [test_resolve.py](../../tests/test_resolve.py), and nothing calls it yet.
 
 People who send messages were meant to need none of this: ADR-002 treats Telegram's sender id as ground truth, and the schema has a `person` table with `telegram_user_id`. Nothing writes to `person` yet.
+
+## Pairing with a curated memory
+
+Chronicle is an evidence layer: everything, sourced, uncurated. A curated memory such as [Hindsight](https://github.com/vectorize-io/hindsight) is the opposite: few facts, chosen deliberately, no evidence trail. They compose through two narrow flows. `ground` attaches the real conversations behind a curated claim on every recall. Promotion goes the other way, rarely: `v_promotable_facts` requires support across 3 or more segments **and** 2 or more threads at confidence 0.7 or higher, because piping every extracted fact into a curated store drowns it.

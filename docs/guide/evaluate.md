@@ -57,7 +57,7 @@ This writes `eval/questions.json` with four template questions; `CHRONICLE_EVAL`
 
 Two rules keep the set honest:
 
-- **Write the question from memory, before you look anything up.** A question written after reading the answer is one you already know is findable ([README](../../README.md#measure-it)).
+- **Write the question from memory, before you look anything up.** A question written after reading the answer is one you already know is findable ([README](../../README.md#numbers)).
 - **Keywords hold only the question's words**: stems, other spellings, the Russian or Ukrainian form of the same word, never a word from the answer. Chronicle gets only the question, so grep gets only its words ([`Question.keywords`](../../chronicle/evaluate.py), [CHANGELOG 0.3.0](../../CHANGELOG.md#030---2026-09-29)).
 
 Then find the evidence ids. [eval-candidates.sh](../../scripts/eval-candidates.sh) searches segments by regular expression over SSH and prints each hit as a question block with its evidence ids filled in. It searches with SQL, not `/recall`, so the benchmark is not chosen by the path it measures. It puts your search pattern into `keywords`; replace that with the question's own words, since you picked the pattern because it appears in the answer. On the host itself, the same search is:
