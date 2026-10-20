@@ -27,7 +27,7 @@ Each row names the evidence for its status. `works` means a test in this reposit
 | One version in the package, pyproject and changelog | works | [test_version.py](../../tests/test_version.py) |
 | `/timeline`, `/ground`, `/commitments` | partial | [api.py](../../chronicle/api.py) |
 | MCP server, seven tools over SSE | partial | [test_mcp_server.py](../../tests/test_mcp_server.py) |
-| dawarich, firefly, forgejo, immich, miniflux, paperless | partial | [test_adapters.py](../../tests/test_adapters.py), [README](../../README.md#status) |
+| dawarich, firefly, forgejo, immich, miniflux, paperless | partial | [test_adapters.py](../../tests/test_adapters.py), [README](../../README.md#how-it-works) |
 | Enrichment: summary, topics, facts, commitments | partial | [worker-itest.py](../../scripts/worker-itest.py), [ROADMAP.md](../../ROADMAP.md) |
 | Cross-script entity keys | partial | [test_resolve.py](../../tests/test_resolve.py), [ADR-002](../ADR-002-entity-resolution.md) |
 | Browser search page at `/` | partial | [ui.html](../../chronicle/ui.html) |
@@ -59,7 +59,7 @@ Nothing in the repository starts the Compose stack or calls the api or the MCP s
 
 ## Limits of what works
 
-- **Hybrid search** scans every segment exactly. [ADR-001](../ADR-001-postgres-not-qdrant.md) expects that to stay cheap until about a million segments. On the reference host a warm `/recall` takes about 0.4 s ([README](../../README.md#running-it)); the first call after a start is slower because the model loads on first use, and the first call after an idle period is slow too ([CLAUDE.md](../../CLAUDE.md#hard-won-facts--do-not-relearn-these), facts 25 and 34).
+- **Hybrid search** scans every segment exactly. [ADR-001](../ADR-001-postgres-not-qdrant.md) expects that to stay cheap until about a million segments. On the reference host a warm `/recall` takes about 0.4 s ([README](../../README.md#numbers)); the first call after a start is slower because the model loads on first use, and the first call after an idle period is slow too ([CLAUDE.md](../../CLAUDE.md#hard-won-facts--do-not-relearn-these), facts 25 and 34).
 - **The date window** applies only when a question names exactly one year.
 - **Redaction** matches patterns and has no entropy heuristic, so a secret in an unknown format with no label nearby stays ([redact.py](../../chronicle/redact.py)). [ROADMAP.md](../../ROADMAP.md#stage-0--worth-using-over-grep-for-its-owner-v0x) keeps goal 3, "no secret reaches the index, the MCP or an LLM", in progress.
 - **Erasure** follows each adapter's `excluded_thread_keys()`, and only `telegram` excludes anything today.

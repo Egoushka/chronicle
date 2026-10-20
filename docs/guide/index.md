@@ -9,9 +9,9 @@ Chronicle is a self-hosted event store and retrieval layer for one person's arch
 
 ## Why segments
 
-Most of a chat archive says nothing on its own. The reference deployment's archive holds 681,331 Telegram messages over seven and a half years: 65.0% of them are under 20 characters, and 1.5% are over 200 ([README](../../README.md#why-segments-not-messages)). Embedded one by one, the short acknowledgements crowd every nearest-neighbour search and bury the messages that say something.
+Most of a chat archive says nothing on its own. The reference deployment's archive holds 681,331 Telegram messages over seven and a half years: 65.0% of them are under 20 characters, and 1.5% are over 200 ([README](../../README.md#numbers)). Embedded one by one, the short acknowledgements crowd every nearest-neighbour search and bury the messages that say something.
 
-So chronicle embeds conversations, not messages. It cuts each chat at a time gap fitted to that chat, caps each piece, and lets a reply bridge a pause in the exchange it answers. On the reference deployment, 685,401 events became 51,044 segments, about 13 events each ([README](../../README.md#why-segments-not-messages)). The research behind the choice is [docs/RESEARCH.md](../RESEARCH.md).
+So chronicle embeds conversations, not messages. It cuts each chat at a time gap fitted to that chat, caps each piece, and lets a reply bridge a pause in the exchange it answers. On the reference deployment, 685,401 events became 51,044 segments, about 13 events each ([README](../../README.md#numbers)). The research behind the choice is [docs/RESEARCH.md](../RESEARCH.md).
 
 ## How it works
 
@@ -38,7 +38,7 @@ One person who self-hosts their own data and wants an assistant to look things u
 [ROADMAP.md](../../ROADMAP.md#will-not-do) lists what the project will not do: index individual messages, build a summary pyramid, train a query router or let a model decide which fact is newer, apply a global recency prior, keep a resident local LLM on the host.
 
 > [!IMPORTANT]
-> The database holds every message of every chat it reads, other people's words included. Reach ports 8030 and 8031 over an SSH tunnel or from another container on the stack's own network, never from a public network ([README](../../README.md#connect-an-assistant)).
+> The database holds every message of every chat it reads, other people's words included. Reach ports 8030 and 8031 over an SSH tunnel or from another container on the stack's own network, never from a public network ([README](quickstart.md#connect-an-assistant)).
 
 ## Where it stands
 
@@ -59,3 +59,4 @@ How well retrieval does against plain `grep` is measured by the evaluation harne
 - [How it works](how-it-works.md): events, segments, retrieval, facts and entities.
 - [Reference](reference.md): MCP tools, HTTP routes, commands, variables and services.
 - [Status and evidence](status.md): what works, what is partial, what is not built.
+- [Develop](develop.md): tests, smoke test and commit hooks.

@@ -8,6 +8,11 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+### Changed
+- README rewritten to the shared README standard: pitch, diagram, Why, Numbers
+  with a source per row. Enrichment gating moved to docs/guide/operate.md, the
+  curated-memory pairing to how-it-works.md, development to docs/guide/develop.md.
+
 ## [0.7.4] - 2026-10-08
 
 ### Changed
