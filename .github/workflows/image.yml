@@ -25,6 +25,8 @@ jobs:
           - { name: chronicle-mcp, dockerfile: Dockerfile.mcp }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: v
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then v=${GITHUB_REF_NAME#v}; else v=ci; fi
