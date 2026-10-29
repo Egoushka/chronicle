@@ -97,10 +97,13 @@ def cmd_ingest(args) -> int:
                    VALUES (%s, %s, %s, %s)
                    ON CONFLICT (source) DO UPDATE
                      SET density = EXCLUDED.density, tier = EXCLUDED.tier
-                   RETURNING last_ingested_at""",
+                   RETURNING last_ingested_at, enabled""",
                 (policy.source, policy.density.value, int(policy.tier), policy.bank))
-            since = cur.fetchone()[0]
+            since, on = cur.fetchone()
         conn.commit()
+        if not on:
+            log.info("skip %s (retired: source.enabled is false)", policy.source)
+            continue
 
         n = refreshed = 0
         try:

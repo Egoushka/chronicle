@@ -134,8 +134,13 @@ def freshness():
                          WHERE ts > now() - interval '365 days'
                          GROUP BY 1, 2"""):
         active.setdefault(src, []).append(day)
+    # A retired source (`source.enabled = false`) keeps its events but is not
+    # judged: dawarich stopped 2026-06-30 and would read "silent" until it
+    # turned dormant at 365 days, holding `ok` false the whole time.
     rows = [classify(src, last, active.get(src, []))
-            for src, last in q("SELECT source, max(ts) FROM event GROUP BY 1")]
+            for src, last in q("""SELECT e.source, max(e.ts) FROM event e
+                                  LEFT JOIN source s USING (source)
+                                  WHERE s.enabled IS NOT FALSE GROUP BY 1""")]
     silent = [r.source for r in rows if r.status == "silent"]
     return {"ok": not silent, "silent": silent,
             "sources": [{**r.__dict__, "last_event": r.last_event.isoformat()}

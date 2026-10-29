@@ -8,6 +8,24 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-10-29
+
+### Fixed
+- The nightly run no longer stops every source when one source stack is retired.
+  Cause: homelab-gitops #766 retired dawarich on 2026-10-13, its
+  `dawarich_default` network went with it, and Compose refused to start the
+  worker ("network dawarich_default declared as external, but could not be
+  found"), so nothing was ingested from 2026-10-14 to 10-29. `scripts/nightly.sh`
+  now runs without any external source network that does not exist, logs it and
+  sends an ntfy warning.
+- `/freshness` could not report `ok` while a retired source still had events:
+  dawarich (last event 2026-06-30) read "silent" and would until it turned
+  dormant at 365 days. A source with `source.enabled = false` is now left out
+  of `/freshness`, and the worker skips it at ingest; its events stay.
+
+### Upgrade
+- To retire a source: `UPDATE source SET enabled = false WHERE source = '<name>'`.
+
 ### Changed
 - README rewritten to the shared README standard: pitch, diagram, Why, Numbers
   with a source per row. Enrichment gating moved to docs/guide/operate.md, the
