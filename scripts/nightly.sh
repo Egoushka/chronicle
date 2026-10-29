@@ -22,8 +22,9 @@ val() { grep -E "^$2=" "$1" 2>/dev/null | cut -d= -f2- || true; }
 # or from chronicle/.env. Unset, a failed night is only in the log.
 NTFY=${NTFY_URL:-$(val .env NTFY_URL)}
 [ -n "$NTFY" ] || echo "NTFY_URL is unset: a failure tonight will not alert"
+notify() { [ -z "$NTFY" ] || curl -s -m 10 -H "Title: chronicle nightly" -d "$1" "$NTFY" >/dev/null || true; }
 fail() {
-  [ -z "$NTFY" ] || curl -s -m 10 -H "Title: chronicle nightly" -d "FAILED: $1" "$NTFY" >/dev/null || true
+  notify "FAILED: $1"
   exit 1
 }
 trap 'fail "line $LINENO (exit $?) — docker logs is empty for run --rm; see /var/log/chronicle.log"' ERR
@@ -66,7 +67,40 @@ if [ -n "$SECRETS" ]; then
 fi
 
 echo "=== $(date -u +%FT%TZ) chronicle nightly, tier ${TIER:-2}"
+
+# A retired source stack takes its network with it, and Compose then refuses to
+# start the worker at all: from 2026-10-14 to 10-29 "network dawarich_default
+# declared as external, but could not be found" stopped every source, not just
+# dawarich. Run without such networks instead, so a missing stack costs only its
+# own source, and alert so compose.override.yaml gets cleaned up.
+compose=(docker compose)
+keep=() missing=()
+while read -r key name external; do
+  if [ "$external" = True ] && ! docker network inspect "$name" >/dev/null 2>&1; then
+    missing+=("$name")
+  else
+    keep+=("$key")
+  fi
+done < <(docker compose --profile batch config --format json | python3 -c '
+import json, sys
+c = json.load(sys.stdin)
+for k in c["services"]["chronicle-worker"].get("networks") or {}:
+    n = (c.get("networks") or {}).get(k) or {}
+    print(k, n.get("name", k), bool(n.get("external")))
+')
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "WARN: running without missing source network(s): ${missing[*]}"
+  notify "WARN: running without missing source network(s): ${missing[*]}. Remove them from compose.override.yaml."
+  ov=$(mktemp)
+  trap 'rm -f "$ov"' EXIT
+  # -f turns off the automatic compose.override.yaml, so name it again.
+  printf 'services:\n  chronicle-worker:\n    networks: !override [%s]\n' "$(IFS=,; echo "${keep[*]}")" >"$ov"
+  compose+=(-f compose.yaml)
+  [ ! -f compose.override.yaml ] || compose+=(-f compose.override.yaml)
+  compose+=(-f "$ov")
+fi
+
 # ${args[@]+...}: an empty array is "unbound" under set -u before bash 4.4.
-docker compose --profile batch run --rm ${args[@]+"${args[@]}"} \
+"${compose[@]}" --profile batch run --rm ${args[@]+"${args[@]}"} \
   chronicle-worker python -m chronicle.worker all --tier "${TIER:-2}"
 echo "=== $(date -u +%FT%TZ) done"
