@@ -14,6 +14,7 @@ a bug.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Iterator
@@ -196,7 +197,11 @@ class GmailAdapter(ApiAdapter):
 
 @register
 class GithubAdapter(ApiAdapter):
-    """GitHub — public commits, PRs, issues. Complements forgejo."""
+    """GitHub — commits, PRs, issues, releases, decisions, sessions.
+
+    Fed by `github_pages` from the history ledger (Egoushka/workspace
+    `context/history/spec.md`): one row per dated event, ids that stay stable.
+    """
 
     source = "github"
     density = Density.NARRATIVE
@@ -208,12 +213,66 @@ class GithubAdapter(ApiAdapter):
             for e in self.fetch_page(start=start, stop=stop) or []:
                 yield SourceEvent(
                     source=self.source, source_id=str(e["id"]), ts=e["ts"],
-                    text=f"[{e.get('repo')}] {e.get('title') or e.get('message','')}",
+                    text=f"[{e.get('repo')}] "
+                         f"{e.get('title') or e.get('message') or e.get('type', 'event')}",
                     actor=e.get("actor"), kind=e.get("type", "github_event"),
                     thread_key=f"github:{e.get('repo')}",
                     payload={"repo": e.get("repo"), "url": e.get("url"),
                              "type": e.get("type")},
                 )
+
+
+def github_pages(token: str, repo: str, tag: str = "ledger",
+                 asset: str = "events.jsonl", http=None):
+    """`fetch_page` for GithubAdapter over the history ledger's release asset.
+
+    `ws history build` keeps the ledger out of git, so `ws history publish`
+    uploads it as `asset` on release `tag` of `repo`. This downloads it once per
+    process (a nightly asks for ~8 yearly windows; ~4 MB each time would be
+    waste) and serves each window from memory. The token only needs read access
+    to that repo's contents; it stays in this closure, never on the adapter.
+    """
+    if http is None:
+        import httpx
+        http = httpx.Client(timeout=120, follow_redirects=True)
+    api = f"https://api.github.com/repos/{repo}"
+    head = {"Authorization": f"Bearer {token}", "X-GitHub-Api-Version": "2022-11-28"}
+    rows: list[dict] | None = None
+
+    def load() -> list[dict]:
+        r = http.get(f"{api}/releases/tags/{tag}",
+                     headers={**head, "Accept": "application/vnd.github+json"})
+        r.raise_for_status()
+        found = [a for a in r.json().get("assets", []) if a.get("name") == asset]
+        if not found:
+            raise RuntimeError(f"release {tag} of {repo} has no asset {asset}")
+        # The asset endpoint answers 302 to a signed URL on another host; httpx
+        # drops the Authorization header on that hop.
+        r = http.get(f"{api}/releases/assets/{found[0]['id']}",
+                     headers={**head, "Accept": "application/octet-stream"})
+        r.raise_for_status()
+        out = []
+        for line in r.text.splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                ts = datetime.fromisoformat(row["ts"].replace("Z", "+00:00"))
+                out.append({"id": row["id"], "ts": ts, "repo": row.get("repo"),
+                            "title": row.get("title"), "actor": row.get("actor"),
+                            "type": row.get("kind"), "url": row.get("url")})
+            except (ValueError, KeyError, AttributeError):
+                log.warning("ledger: skipping a malformed row")
+        out.sort(key=lambda e: e["ts"])
+        return out
+
+    def fetch_page(start: datetime, stop: datetime) -> list[dict]:
+        nonlocal rows
+        if rows is None:
+            rows = load()
+        return [e for e in rows if start <= e["ts"] < stop]
+
+    return fetch_page
 
 
 @register

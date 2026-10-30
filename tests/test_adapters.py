@@ -912,3 +912,69 @@ def test_two_long_messages_are_substantive():
                          row("Добре. Візьму каву на двох")]) is True
     assert _substantive([row("ок"), row("ага")]) is False
     assert _substantive([row("ок")]) is False
+
+
+def test_github_pages_reads_the_ledger_asset_once_and_cuts_windows():
+    from chronicle.adapters.api_sources import GithubAdapter, github_pages
+
+    ledger = "\n".join([
+        json.dumps({"id": "pr:o/r#1", "kind": "pr", "ts": "2026-10-01T10:00:00Z",
+                    "repo": "o/r", "title": "first", "actor": "me", "url": "u1"}),
+        "not json",
+        json.dumps({"id": "session:s1", "kind": "session", "ts": "2026-10-20T08:00:00Z",
+                    "repo": None, "title": None}),
+        json.dumps({"id": "pr:o/r#2", "kind": "pr", "ts": "2025-01-05T00:00:00Z",
+                    "repo": "o/r", "title": "old"}),
+        ""])
+    seen = []
+
+    class Http:
+        def get(self, url, headers):
+            seen.append((url, headers))
+            if url.endswith("/releases/tags/ledger"):
+                body = {"assets": [{"name": "other.txt", "id": 1},
+                                   {"name": "events.jsonl", "id": 7}]}
+                return type("R", (), {"raise_for_status": lambda s: None,
+                                      "json": lambda s: body})()
+            return type("R", (), {"raise_for_status": lambda s: None, "text": ledger})()
+
+    fetch = github_pages("tok", "o/w", http=Http())
+    ad = GithubAdapter(fetch_page=fetch)
+    events = list(ad.fetch(since=datetime(2025, 1, 1, tzinfo=timezone.utc),
+                           until=datetime(2026, 11, 1, tzinfo=timezone.utc)))
+
+    assert [e.source_id for e in events] == ["pr:o/r#2", "pr:o/r#1", "session:s1"]
+    assert events[1].text == "[o/r] first" and events[2].text == "[None] session"
+    assert events[1].thread_key == "github:o/r" and events[1].payload["type"] == "pr"
+    assert [u for u, _ in seen] == [
+        "https://api.github.com/repos/o/w/releases/tags/ledger",
+        "https://api.github.com/repos/o/w/releases/assets/7"], "downloaded once for 2 windows"
+    assert all(h["Authorization"] == "Bearer tok" for _, h in seen)
+    assert seen[1][1]["Accept"] == "application/octet-stream"
+
+
+def test_github_pages_names_a_release_without_the_asset():
+    from chronicle.adapters.api_sources import github_pages
+
+    class Http:
+        def get(self, url, headers):
+            return type("R", (), {"raise_for_status": lambda s: None,
+                                  "json": lambda s: {"assets": []}})()
+
+    fetch = github_pages("tok", "o/w", http=Http())
+    with pytest.raises(RuntimeError, match="no asset events.jsonl"):
+        fetch(start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+              stop=datetime(2026, 2, 1, tzinfo=timezone.utc))
+
+
+def test_github_source_is_built_only_with_a_token(monkeypatch):
+    from chronicle.doctor import build
+    for k in ("LEDGER_GITHUB_TOKEN", "LEDGER_GITHUB_REPO", "LEDGER_GITHUB_TAG"):
+        monkeypatch.delenv(k, raising=False)
+    assert build("github") is None
+    made = []
+    monkeypatch.setattr("chronicle.adapters.api_sources.github_pages",
+                        lambda *a: made.append(a) or (lambda **kw: []))
+    monkeypatch.setenv("LEDGER_GITHUB_TOKEN", "t")
+    assert build("github").source == "github"
+    assert made == [("t", "Egoushka/workspace", "ledger")]

@@ -163,6 +163,8 @@ compose.yaml also sets `EMBED_DIM: "1024"` on the api. The code does not read it
 | `DAWARICH_USER_ID` | dawarich | `users.id`, a number |
 | `FIREFLY_DB_URL` | firefly | `mysql://user:pass@host:3306/db` |
 | `LASTFM_API_KEY`, `LASTFM_USER` | lastfm | a read key and the username |
+| `LEDGER_GITHUB_TOKEN` | github | a read-only token for the repo holding the history ledger release |
+| `LEDGER_GITHUB_REPO`, `LEDGER_GITHUB_TAG` | github | optional: `Egoushka/workspace` and `ledger` |
 | `FORGEJO_DB_URL` | forgejo | a PostgreSQL DSN |
 | `FORGEJO_EMAIL` | forgejo | optional: keep one author's actions |
 | `IMMICH_DB_URL` | immich | a PostgreSQL DSN |
