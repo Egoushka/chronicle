@@ -8,6 +8,22 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-10-30
+
+### Added
+- The `github` source now reads the owner's history ledger (`github_pages`):
+  the `events.jsonl` asset of a GitHub release, downloaded once per run with a
+  read-only token and served to the adapter in windows. Ledger ids are the
+  event ids, so reruns add nothing. `/freshness` lists `github` with its newest
+  event.
+
+### Upgrade
+- Set `LEDGER_GITHUB_TOKEN` (a fine-grained token, read access to the ledger
+  repository's contents). `scripts/nightly.sh` reads it from
+  `../chronicle-ingest/.env`. Without it the source is skipped.
+  `LEDGER_GITHUB_REPO` (`Egoushka/workspace`) and `LEDGER_GITHUB_TAG`
+  (`ledger`) are optional.
+
 ## [0.7.5] - 2026-10-29
 
 ### Fixed

@@ -48,6 +48,15 @@ if [ -n "$pw" ]; then
   args+=(-e NYTKA_DB_URL)
 fi
 
+# The history ledger (github source): a read-only token for Egoushka/workspace's
+# `ledger` release, in homelab-gitops' chronicle-ingest stack (secrets only, no
+# containers). Without it the source is skipped.
+tok=$(val ../chronicle-ingest/.env LEDGER_GITHUB_TOKEN)
+if [ -n "$tok" ]; then
+  export LEDGER_GITHUB_TOKEN=$tok
+  args+=(-e LEDGER_GITHUB_TOKEN)
+fi
+
 # firefly's .env is shell-sourceable (doctor-homelab.sh sources it too).
 if [ -f ../firefly/.env ]; then
   ff=$(set -a; . ../firefly/.env; echo "$DB_USERNAME:$DB_PASSWORD@firefly-db:3306/$DB_DATABASE")

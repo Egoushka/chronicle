@@ -20,7 +20,7 @@ A source takes three things, and then a check:
 |---|---|---|
 | 1, core | `telegram`, `wakapi`, `dawarich` | `calendar` |
 | 2, behaviour | `firefly`, `lastfm`, `forgejo` | `jira` |
-| 3, artifact | `immich`, `paperless`, `karakeep` | `gmail`, `notion`, `github`, `linkedin`, `slack` |
+| 3, artifact | `immich`, `paperless`, `karakeep`, `github` | `gmail`, `notion`, `linkedin`, `slack` |
 | 4, ambient | `miniflux`, `owntracks`, `nytka` | none |
 
 Each source also has a density, which decides how its events are aggregated and whether they are segmented ([Source policy](how-it-works.md#source-policy)). The notes under each table name it.
@@ -79,9 +79,11 @@ Each source also has a density, which decides how its events are aggregated and 
 
 **paperless** (discrete) emits one event per document at the document's own `created` date, not its scan date, with the title and the first 4,000 characters of the OCR text ([paperless.py](../../chronicle/adapters/paperless.py)).
 
+**github** (narrative) reads the owner's history ledger, one JSON line per dated event (merged PR, direct commit, release, issue, decision, audit, session), from the `events.jsonl` asset of the `ledger` release of a repository ([api_sources.py](../../chronicle/adapters/api_sources.py), `github_pages`). The asset is downloaded once per run with a read-only token and cut into windows in memory; an event reads `[<repo>] <title>`, keeps the ledger id as its source id, and takes the thread key `github:<repo>`. Without `LEDGER_GITHUB_TOKEN` the source is skipped. The ledger is only as fresh as its last publish: `/freshness` calls the source silent once it is quiet for twice its usual gap.
+
 **karakeep** (discrete) reads link and text bookmarks from Karakeep's SQLite file, with any note attached ([karakeep.py](../../chronicle/adapters/karakeep.py)). An event holds the title, description, body and note, or the URL when all of those are empty.
 
-`gmail`, `notion`, `github`, `linkedin` and `slack` are listed under [Sources you cannot connect yet](#sources-you-cannot-connect-yet).
+`gmail`, `notion`, `linkedin` and `slack` are listed under [Sources you cannot connect yet](#sources-you-cannot-connect-yet).
 
 ## Tier 4: ambient
 
@@ -107,7 +109,7 @@ Each source also has a density, which decides how its events are aggregated and 
 
 ## Sources you cannot connect yet
 
-`calendar`, `jira`, `gmail`, `notion`, `github`, `linkedin` and `slack` are written as adapters over an injected `fetch_page` callable, so they never hold a credential ([api_sources.py](../../chronicle/adapters/api_sources.py)). Nothing in the repository supplies that callable. `doctor.build` constructs only `lastfm` among the API adapters, so `doctor` reports the other seven as not configured and `ingest` skips them. Connecting one means writing its page fetcher and adding it to `doctor.build`.
+`calendar`, `jira`, `gmail`, `notion`, `linkedin` and `slack` are written as adapters over an injected `fetch_page` callable, so they never hold a credential ([api_sources.py](../../chronicle/adapters/api_sources.py)). Nothing in the repository supplies that callable. `doctor.build` constructs only `lastfm` and `github` among the API adapters, so `doctor` reports the other six as not configured and `ingest` skips them. Connecting one means writing its page fetcher and adding it to `doctor.build`.
 
 Stage 1 of [ROADMAP.md](../../ROADMAP.md#stage-1--someone-else-can-run-it-v1x) plans the calendar source, with OAuth, end to end.
 

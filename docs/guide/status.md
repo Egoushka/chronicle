@@ -31,7 +31,8 @@ Each row names the evidence for its status. `works` means a test in this reposit
 | Enrichment: summary, topics, facts, commitments | partial | [worker-itest.py](../../scripts/worker-itest.py), [ROADMAP.md](../../ROADMAP.md) |
 | Cross-script entity keys | partial | [test_resolve.py](../../tests/test_resolve.py), [ADR-002](../ADR-002-entity-resolution.md) |
 | Browser search page at `/` | partial | [ui.html](../../chronicle/ui.html) |
-| calendar, jira, gmail, notion, github, linkedin, slack | not yet | [api_sources.py](../../chronicle/adapters/api_sources.py), [doctor.py](../../chronicle/doctor.py) |
+| github (history ledger) | works | [test_adapters.py](../../tests/test_adapters.py) |
+| calendar, jira, gmail, notion, linkedin, slack | not yet | [api_sources.py](../../chronicle/adapters/api_sources.py), [doctor.py](../../chronicle/doctor.py) |
 | Ambient sources kept off the default search | not yet | [002_retrieval.sql](../../migrations/002_retrieval.sql) |
 | Trips between location stays | not yet | [dawarich.py](../../chronicle/adapters/dawarich.py) |
 | People from Telegram sender ids | not yet | [001_core.sql](../../migrations/001_core.sql) |

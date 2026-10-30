@@ -149,6 +149,14 @@ def build(source: str):
         from .adapters.api_sources import lastfm_pages
         key, user = _env("LASTFM_API_KEY"), _env("LASTFM_USER")
         return cls(fetch_page=lastfm_pages(key, user)) if key and user else None
+    if source == "github":
+        from .adapters.api_sources import github_pages
+        tok = _env("LEDGER_GITHUB_TOKEN")
+        if not tok:
+            return None
+        return cls(fetch_page=github_pages(
+            tok, _env("LEDGER_GITHUB_REPO") or "Egoushka/workspace",
+            _env("LEDGER_GITHUB_TAG") or "ledger"))
     # The other API adapters need an injected fetch_page backed by credentials
     # the box does not hold (Google OAuth for calendar, a Jira token), so they
     # are reported as SKIP rather than FAIL.
