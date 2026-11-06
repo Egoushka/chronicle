@@ -21,4 +21,5 @@ compose.override.yaml
 # and the eval set — real questions about a real archive, keyed by message id.
 .private-terms
 CLAUDE.local.md
+.claude/rules/local-*.md
 eval/questions.json

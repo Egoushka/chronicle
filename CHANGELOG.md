@@ -9,6 +9,7 @@ says so under **Upgrade**.
 ## [Unreleased]
 
 - CLAUDE.md split into a 6.6 KB core plus path-scoped `.claude/rules/*.md` (43.2 KB before), so agents load area facts only when they touch matching files. Text moved verbatim.
+- `.worktreeinclude` copies the private `CLAUDE.local.md`, `.private-terms` and `.claude/rules/local-*.md` into new worktrees; those local rule files are gitignored.
 
 ## [0.7.6] - 2026-10-30
 
