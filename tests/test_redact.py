@@ -81,6 +81,17 @@ def test_a_bare_secret_with_its_label_on_another_line(label):
     assert found["bare_secret"] == 1
 
 
+def test_a_bare_secret_on_a_crlf_line_is_redacted():
+    """#47: `$` does not match before `\\r`, so a Windows line ending hid the
+    value. The `\\r\\n` stays; only the value is replaced."""
+    value = "Zq7" + ALNUM[:20] + "#x"
+    text, found = redact(f"{value}\r\n\r\nphotos api key")
+
+    assert text == "[REDACTED:bare_secret]\r\n\r\nphotos api key"
+    assert found["bare_secret"] == 1
+    assert redact(text) == (text, {})
+
+
 @pytest.mark.parametrize("text", [
     "commit 3f2a9c1b7e5d4a6f8b0c2e4d6f8a0b2c4d6e8f0a fixed it",   # no label: a hash
     "the key point is https://example.com/a1b2c3d4e5f6g7h8",    # a URL, never a secret
