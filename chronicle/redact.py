@@ -80,10 +80,13 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [(k, re.compile(p)) for k, p in [
 # (XAML's `xmlns:x="http://…"` lines) and never code shape (`_CODE`). Without
 # the label, the same token is a hash or an id and stays — which is what keeps
 # a chat archive full of links and commit SHAs from being redacted in bulk.
+# `\r` in the trailing run: under (?m) `$` matches before `\n` only, so a
+# CRLF line — pasted from a Windows tool or fetched over HTTP — never ended
+# the match and its secret stayed (#47). `\S` already stops before `\r`.
 _LABEL = re.compile(r"(?i)(?:key|token|pass|passwd|password|passphrase|pwd|secret|"
                     r"парол\w*|ключ\w*|токен\w*)\b")
 _BARE = re.compile(r"(?m)^[ \t]*(?!\[REDACTED)(?!\S*://)(?!www\.)"
-                   r"(?=\S*\d)(?=\S*[A-Za-z])(?P<v>\S{20,})[ \t]*$")
+                   r"(?=\S*\d)(?=\S*[A-Za-z])(?P<v>\S{20,})[ \t\r]*$")
 # Code, not a credential: a call, a statement end, a block, an attribute.
 # Characters alone cannot tell them apart — two of the five real passwords
 # hold punctuation that a character blocklist dropped.
