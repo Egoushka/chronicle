@@ -60,15 +60,22 @@ have=$(git rev-parse HEAD)
   || die "working tree is dirty at $TAG — commit or stash before deploying it"
 
 # ---------------------------------------------------------------------------
-# 2. Sync the host-side tree, protecting the box's own four paths both from
-#    being overwritten and from --delete (a file the tag removes elsewhere
-#    still needs removing, e.g. a retired script).
+# 2. Sync the host-side tree, keeping the box's own four paths out of it in
+#    both directions. `protect` alone is NOT enough here: it only exempts a
+#    path from the --delete pass: a file present on BOTH sides still gets
+#    overwritten by the sender's copy. The deploy is run from a clone set up
+#    exactly as the Quickstart says to for local dev — `.env` and
+#    `compose.override.yaml` copied in beside compose.yaml, `models/` and
+#    `eval/questions.json` gitignored but commonly present — so all four are
+#    quite likely to exist, with the wrong content, on the sending side too.
+#    `exclude` is "hide" (keep off the transfer) plus "protect" (keep off the
+#    delete pass) together: these four are untouched on the box either way.
 # ---------------------------------------------------------------------------
 say "rsync $TAG -> $HOST:$DEST"
 rsync -az --delete \
-  --exclude .git/ \
-  --filter='protect .env' --filter='protect compose.override.yaml' \
-  --filter='protect eval/questions.json' --filter='protect models/' \
+  --exclude '/.git/' \
+  --exclude '/.env' --exclude '/compose.override.yaml' \
+  --exclude '/eval/questions.json' --exclude '/models/' \
   ./ "$HOST:$DEST/"
 
 # ---------------------------------------------------------------------------
