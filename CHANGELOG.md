@@ -11,6 +11,7 @@ says so under **Upgrade**.
 - CLAUDE.md split into a 6.6 KB core plus path-scoped `.claude/rules/*.md` (43.2 KB before), so agents load area facts only when they touch matching files. Text moved verbatim.
 - `.worktreeinclude` copies the private `CLAUDE.local.md`, `.private-terms` and `.claude/rules/local-*.md` into new worktrees; those local rule files are gitignored.
 - `redact()` now redacts a bare secret alone on a CRLF-terminated line; `$` under `(?m)` does not match before `\r`, so such a value was left as is (#47).
+- `scripts/dependabot_decision.py`: the pure decision logic for merging a green Dependabot patch/minor PR (update type x check-run conclusions -> merge or skip), tested in `tests/test_dependabot_decision.py` (#51). No workflow change ships with it — chargehand refuses any branch touching `.github/workflows/`, and that directory already has `dependabot-automerge.yml` (#27, #28) doing a related but differently-triggered thing; wiring this module in is for a human edit to that file.
 
 ### Upgrade
 - Events stored before this fix may hold a bare secret on a CRLF line: run `make redact-secrets` to count them, `APPLY=1` to rewrite.
