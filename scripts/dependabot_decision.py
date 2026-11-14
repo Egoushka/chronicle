@@ -11,11 +11,14 @@ call instead of re-deriving it in a `run:` block.
 update_type is one of dependabot/fetch-metadata's semver buckets:
 "version-update:semver-patch", "...-minor", "...-major" (anything else -
 e.g. a version-update with no semver info - is treated like major: left
-for a human). check_conclusions is one entry per check run on the PR's
-head commit, using the GitHub Checks API vocabulary: None/"" for a run
-that has not completed yet, otherwise its conclusion
-("success", "neutral", "skipped", "failure", "cancelled", "timed_out",
-"action_required", "startup_failure", ...).
+for a human). new_version is the dependency's new version string, used
+only to catch a 0.x minor bump: pre-1.0 semver gives no real patch/minor
+distinction, so the existing dependabot-automerge.yml (#27, #28) treats
+one as breaking-capable and leaves it for a human too. check_conclusions
+is one entry per check run on the PR's head commit, using the GitHub
+Checks API vocabulary: None/"" for a run that has not completed yet,
+otherwise its conclusion ("success", "neutral", "skipped", "failure",
+"cancelled", "timed_out", "action_required", "startup_failure", ...).
 """
 from dataclasses import dataclass
 
@@ -29,9 +32,12 @@ class Decision:
     reason: str
 
 
-def decide(update_type: str, check_conclusions: list) -> Decision:
+def decide(update_type: str, check_conclusions: list, new_version: str | None = None) -> Decision:
     if update_type not in MERGEABLE_TYPES:
         return Decision("skip", f"{update_type} is not a patch/minor update; leaving it for review")
+
+    if update_type == "version-update:semver-minor" and new_version is not None and new_version.startswith("0."):
+        return Decision("skip", f"{new_version} is a 0.x minor bump, which can break; leaving it for review")
 
     if not check_conclusions:
         return Decision("skip", "no checks ran on this commit; never merge without CI")
