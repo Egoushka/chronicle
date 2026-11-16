@@ -17,7 +17,7 @@ dependencies = [
     "pymorphy3-dicts-uk>=2.4.1.1.1663094765",
     "FlagEmbedding>=1.4.2",
     "sentence-transformers>=3.3",
-    "onnxruntime>=1.30.0",   # the api's query encoder, EMBED_BACKEND=onnx; docs/ADR-003
+    "onnxruntime>=1.31.1",   # the api's query encoder, EMBED_BACKEND=onnx; docs/ADR-003
 ]
 
 [project.optional-dependencies]
