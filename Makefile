@@ -1,7 +1,7 @@
 # eval/ is a DIRECTORY, so without .PHONY `make eval` finds it, decides the
 # target is up to date and does nothing — silently, exit 0.
 .PHONY: test lint migrate migrate-rename smoke fmt help doctor doctor-homelab purge-excluded \
-        eval eval-init eval-threads eval-homelab resegment redact-secrets
+        eval eval-init eval-threads eval-homelab resegment redact-secrets deploy-tag
 
 VENV  := .venv
 TOOLS := $(VENV)/bin/pytest
@@ -108,3 +108,7 @@ resegment: ## rebuild named THREADS at CAP events per segment (see eval-threads)
 eval-homelab: ## make eval ON THE BOX — the dump is the whole archive and stays there
 	ssh "$${CHRONICLE_DOCTOR_HOST:?set CHRONICLE_DOCTOR_HOST}" \
 	  "$${CHRONICLE_STACKS:?set CHRONICLE_STACKS}/chronicle/scripts/eval-homelab.sh"
+
+deploy-tag: ## rsync TAG=vX.Y.Z to the box, restart, check /health reports it (see scripts/deploy-tag.sh)
+	@test -n "$(TAG)" || { echo "set TAG=vX.Y.Z"; exit 1; }
+	./scripts/deploy-tag.sh $(TAG)

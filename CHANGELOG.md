@@ -11,6 +11,7 @@ says so under **Upgrade**.
 - CLAUDE.md split into a 6.6 KB core plus path-scoped `.claude/rules/*.md` (43.2 KB before), so agents load area facts only when they touch matching files. Text moved verbatim.
 - `.worktreeinclude` copies the private `CLAUDE.local.md`, `.private-terms` and `.claude/rules/local-*.md` into new worktrees; those local rule files are gitignored.
 - `redact()` now redacts a bare secret alone on a CRLF-terminated line; `$` under `(?m)` does not match before `\r`, so such a value was left as is (#47).
+- `scripts/deploy-tag.sh` deploys a tag to a box whose checkout is rsynced, not git: it rsyncs the tag's tree (keeping `.env`, `compose.override.yaml`, `eval/questions.json` and `models/`), warns about any `.env.example` key the box's `.env` is missing, sets `CHRONICLE_VERSION`, restarts `chronicle-api`/`chronicle-mcp`, and polls `/health` until it reports the deployed version (#40).
 
 ### Upgrade
 - Events stored before this fix may hold a bare secret on a CRLF line: run `make redact-secrets` to count them, `APPLY=1` to rewrite.

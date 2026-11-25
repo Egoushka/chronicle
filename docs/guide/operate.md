@@ -53,6 +53,8 @@ The worker is `restart: "no"` and exits when its batch is done, so it holds memo
 
 A deployment runs a tag, never a working tree ([CLAUDE.md](../../CLAUDE.md#versions-and-releases)). Read the release's section in [CHANGELOG.md](../../CHANGELOG.md) first: a release that needs more than pulling and restarting, such as a migration, a new setting or a backfill, says so under **Upgrade**.
 
+On a host where the chronicle directory is a git checkout:
+
 ```bash title="Move to a release"
 git fetch --tags
 git checkout v0.3.0
@@ -62,6 +64,16 @@ curl -s http://127.0.0.1:8030/health
 ```
 
 `/health` reports the version the api runs.
+
+On the reference box the chronicle directory is **rsynced, not a git checkout** — there is no `.git` there for `git fetch`/`git checkout` to run against, and because nothing kept it in sync automatically it has drifted from main before. [deploy-tag.sh](../../scripts/deploy-tag.sh) does the same move for that layout: run it from a clone checked out at the tag, pointed at the box with `CHRONICLE_DOCTOR_HOST` and `CHRONICLE_STACKS` (the same variables [doctor-homelab.sh](../../scripts/doctor-homelab.sh) and `make eval-homelab` use). It rsyncs the tag's tree onto the box, keeping `.env`, `compose.override.yaml`, `eval/questions.json` and `models/` as the box's own; warns if the tag's `.env.example` names a setting the box's `.env` does not have yet; pulls the tag's `ghcr.io` image (built by `.github/workflows/image.yml` on push of the same tag) into `CHRONICLE_VERSION`; restarts `chronicle-api` and `chronicle-mcp`; and polls `/health` until it reports that version, failing loud if it never does or reports a different one.
+
+```bash title="Deploy a release to a rsynced box"
+git checkout v0.3.0
+CHRONICLE_DOCTOR_HOST=<host> CHRONICLE_STACKS=<stacks dir> ./scripts/deploy-tag.sh v0.3.0
+# or: make deploy-tag TAG=v0.3.0
+```
+
+Neither route applies a new migration file by itself — see below.
 
 PostgreSQL runs the migrations from its init directory only on an empty volume, so an upgrade that adds a migration needs it applied by hand. The database container mounts [migrations/](../../migrations) at `/docker-entrypoint-initdb.d`, so you can apply one file there:
 
