@@ -21,6 +21,7 @@ TOOLS = {
     "timeline": ["date_from", "date_to", "sources"],
     "open_commitments": ["older_than_days"],
     "ground": ["claim", "limit"],
+    "lifeline_ask": ["question", "since", "until"],
 }
 
 

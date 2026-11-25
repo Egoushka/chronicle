@@ -148,6 +148,27 @@ async def ground(claim: str, limit: int = 10) -> str:
     return r.text
 
 
+@mcp.tool()
+async def lifeline_ask(question: str, since: str | None = None,
+                       until: str | None = None) -> str:
+    """Ask ONE question across the owner's sleep (oura), coding (wakapi), Telegram and mail.
+
+    Use for cross-source questions: "how did I sleep before my longest coding
+    days last week", "what did I discuss on the day my sleep score was lowest".
+    Returns {answer, citations: [{source, event_id, ts, snippet}]}; every
+    citation is an event that was actually retrieved, and a question the
+    evidence cannot support is an error, not a guess. `since`/`until` are ISO
+    datetimes; without them the window is read from the question ("last week",
+    "this month") or defaults to the last 30 days.
+
+    Do NOT use for a single-source lookup (use `recall`, `timeline` or `tally`).
+    """
+    r = await _client.post("/lifeline/ask", json={
+        "question": question, "since": since, "until": until})
+    r.raise_for_status()
+    return r.text
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     # The default host is 127.0.0.1, which inside a container means nothing

@@ -142,6 +142,16 @@ def build(source: str):
         mine = _env("CHRONICLE_DB_URL")
         return cls(dsn, exclude_conversation_ids=tuple(raw.replace(",", " ").split()),
                    indexed=chronicle_index(mine) if mine else None)
+    if source == "oura":
+        dsn = _env("OURA_DB_URL")
+        return cls(dsn) if dsn else None
+    if source == "mail":
+        root = _env("MAIL_MAILDIR")
+        if not root:
+            return None
+        folders = tuple((_env("MAIL_FOLDERS") or "INBOX").replace(",", " ").split())
+        skip = tuple((_env("MAIL_EXCLUDE_SENDERS") or "").replace(",", " ").split())
+        return cls(root, folders=folders, exclude_senders=skip)
     if source == "owntracks":
         root = _env("OWNTRACKS_STORE")
         return cls(root) if root else None
