@@ -51,6 +51,7 @@ def test_oura_skips_missing_kinds_and_honours_since():
 
 
 def test_oura_connection_is_read_only():
+    pytest.importorskip("psycopg")   # the unit tier installs no database driver
     ad = OuraAdapter("postgresql://u:p@db:5432/oura")
     assert "default_transaction_read_only" in ad.dsn
 
