@@ -136,3 +136,15 @@ decides how hard the adapter aggregates *before* the segment layer:
 the goal — monitoring, qdrant and vaultwarden describe the machine, not the
 life. `make test` fails if an adapter has no policy, or if `dawarich` and
 `owntracks` are both on (same GPS signal, every trip double-counted).
+
+53. **oura reads complete days only.** `daily` is upserted while the day runs;
+   `ON CONFLICT DO NOTHING` would freeze the first half-day read. The adapter
+   stops at yesterday (UTC), and sets the Postgres session read-only itself
+   because the warehouse role is the writer's own.
+54. **mail resumes on the Maildir file's download epoch, not the Date header.**
+   mbsync names files `<epoch>.<n>_<m>.<host>,U=<uid>:2,<flags>`; mail that
+   arrives late with an old Date is still caught. `ts` is the Date header,
+   clamped to the download time when absent or more than a day ahead. A
+   mailbox is mostly machines: only `MAIL_FOLDERS` (default INBOX), and
+   List-Unsubscribe, `Precedence: bulk|list|junk` and `Auto-Submitted` mail is
+   dropped before it becomes an event.

@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from . import lifeline as lifeline_mod
 from . import rerank as rerank_mod
 from .embed import Embedder, Lemmatizer
 from .rank import reciprocal_rank_fusion  # noqa: F401  (used by SQL-side RRF parity tests)
@@ -368,3 +369,45 @@ def ground(req: GroundReq):
             "note": "presented chronologically so a change of position is visible; "
                     "later evidence contradicting earlier evidence is the signal, "
                     "not a retrieval error"}
+
+
+class LifelineReq(BaseModel):
+    question: str
+    since: datetime | None = None
+    until: datetime | None = None
+
+
+@app.post("/lifeline/ask")
+def lifeline_ask(req: LifelineReq):
+    """One question across sleep, coding, chat and mail, with citations.
+
+    422 when the model could not support an answer from retrieved events: the
+    route never returns an answer without at least one citation. See
+    `chronicle.lifeline`.
+    """
+    llm = _state.get("lifeline_llm") or lifeline_mod.llm_from_env()
+    if llm is None:
+        raise HTTPException(503, "lifeline needs LITELLM_BASE_URL, LITELLM_API_KEY and "
+                                 "LIFELINE_MODEL (or ENRICH_MODEL)")
+    _state["lifeline_llm"] = llm
+    if len(req.question) > 1000:
+        raise HTTPException(400, "question over 1000 characters")
+    try:
+        return lifeline_mod.ask(req.question, query=q, llm=llm,
+                                since=req.since, until=req.until)
+    except lifeline_mod.LifelineError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    except Exception as exc:                                # noqa: BLE001
+        log.exception("lifeline failed")
+        raise HTTPException(502, f"lifeline model call failed: {type(exc).__name__}") from exc
+
+
+@app.get("/event/{event_id}")
+def event_by_id(event_id: int):
+    """Resolve a citation: does this event id exist, and what is it."""
+    rows = q("""SELECT event_id, source, ts, left(text, 300) FROM event
+                WHERE event_id = %s LIMIT 1""", (event_id,))
+    if not rows:
+        raise HTTPException(404, "no such event")
+    r = rows[0]
+    return {"event_id": r[0], "source": r[1], "ts": r[2].isoformat(), "snippet": r[3]}

@@ -8,12 +8,19 @@ says so under **Upgrade**.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-25
+
+- Lifeline: `POST /lifeline/ask` and the MCP tool `lifeline_ask(question, since?, until?)` answer one question across sleep, coding, Telegram and mail and return `{answer, citations: [{source, event_id, ts, snippet}]}`. Every cited id must be an event that was retrieved; an answer with no citation is a 422, not a guess. One planning call at most, then one answer call, through the same Bifrost key as enrich (`LIFELINE_MODEL`, default `ENRICH_MODEL`; `LIFELINE_TZ` sets the day boundary, default UTC).
+- `GET /event/{id}` resolves a citation.
+- `oura` adapter: per complete day, one `sleep`, `readiness`, `activity` and `heart` event ("Sleep 7h12, score 81, HRV 54") from the Oura warehouse, over a read-only session.
+- `mail` adapter: one event per human-written message from the mail-sync Maildir (sender, subject, two-line snippet; no attachments, no quoted thread; bulk, list and auto-submitted mail dropped). Resumes by download time.
 - CLAUDE.md split into a 6.6 KB core plus path-scoped `.claude/rules/*.md` (43.2 KB before), so agents load area facts only when they touch matching files. Text moved verbatim.
 - `.worktreeinclude` copies the private `CLAUDE.local.md`, `.private-terms` and `.claude/rules/local-*.md` into new worktrees; those local rule files are gitignored.
 - `redact()` now redacts a bare secret alone on a CRLF-terminated line; `$` under `(?m)` does not match before `\r`, so such a value was left as is (#47).
 
 ### Upgrade
 - Events stored before this fix may hold a bare secret on a CRLF line: run `make redact-secrets` to count them, `APPLY=1` to rewrite.
+- Set `OURA_DB_URL` for oura, and mount the Maildir and set `MAIL_MAILDIR` (optional `MAIL_FOLDERS`, default `INBOX`; `MAIL_EXCLUDE_SENDERS`) for mail. Both appear on the next `ingest --tier 4`; nothing else migrates.
 
 ## [0.7.6] - 2026-10-30
 

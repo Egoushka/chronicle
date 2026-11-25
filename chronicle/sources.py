@@ -141,6 +141,21 @@ POLICIES: list[SourcePolicy] = [
         "Contains colleagues' words. Keep local; never promote quotes.",
     ),
 
+    SourcePolicy(
+        "oura", Density.DISCRETE, Tier.BEHAVIOUR, "personal",
+        "Sleep, readiness, activity and heart rate per day: the body's side of "
+        "every timeline, recorded without curating. One event per day per kind.",
+        "Complete days only; today's row is still being upserted.",
+    ),
+    SourcePolicy(
+        "mail", Density.DISCRETE, Tier.ARTIFACT, "personal",
+        "Mail the owner received or wrote, from the mail-sync Maildir: sender, "
+        "subject and a two-line snippet. Complements telegram for anything "
+        "formal.",
+        "A mailbox is mostly machines. Only the configured folders, and bulk, "
+        "list and auto-submitted mail is dropped in the adapter.",
+    ),
+
     # ---------------- Tier 4 — AMBIENT --------------------------------------
     SourcePolicy(
         "miniflux", Density.AMBIENT, Tier.AMBIENT, None,
