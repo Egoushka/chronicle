@@ -2,6 +2,8 @@ name: ci
 
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -9,6 +11,7 @@ permissions:
 
 jobs:
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -23,6 +26,7 @@ jobs:
       - run: ruff check chronicle/ tests/ || true
 
   migrations:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     services:
       # pgvector >= 0.7 required: halfvec does not exist in 0.6.
@@ -45,6 +49,7 @@ jobs:
         run: ./scripts/smoke.sh
 
   secrets:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork || github.event.pull_request.user.type == 'Bot'
     runs-on: ubuntu-latest
     # On pull requests gitleaks-action lists the PR's commits through the API.
     permissions:
@@ -68,3 +73,19 @@ jobs:
             echo "$bad" | cut -d' ' -f1 | sort -u
             exit 1
           fi
+
+  # An owner PR is gated by the `fast-tier` status `ws ship` posts; a Dependabot PR
+  # runs the full suite instead and earns the same status here, once it all passed.
+  bot-fast-tier:
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.type == 'Bot' && !github.event.pull_request.head.repo.fork
+    needs: [test, migrations, secrets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: gh api "repos/$REPO/statuses/$SHA" -f state=success -f context=fast-tier -f description="full CI passed on a bot PR"
