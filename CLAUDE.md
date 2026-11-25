@@ -131,3 +131,7 @@ from that section. A deployment runs a tag, never a working tree.
   behind it. The codebase is dense with these deliberately; the reasoning is
   the expensive part, not the code.
 - New ADRs go in `docs/` as `ADR-NNN-slug.md`.
+
+## CI gate
+
+The only required status check is `fast-tier`. `ws ship` posts it after the local fast tier; a fork or Dependabot PR runs the full CI instead. The full suite also runs once on push to main.
